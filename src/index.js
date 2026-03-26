@@ -61,7 +61,7 @@ const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
-const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1";
+const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-wordlist-filter-v1";
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
@@ -449,15 +449,19 @@ function findRankFromSortedScores(sortedScores, score) {
   return low + 1;
 }
 
-function buildRankingVocabulary(answer) {
-  const filteredWords = popularWords.getMostPopularFilter(
-    RANKING_VOCAB_SIZE,
-    (word) =>
-      /^[a-z]+$/.test(word) &&
-      word.length >= 3 &&
-      word.length <= 16 &&
-      !STOP_WORDS.has(word)
-  );
+async function buildRankingVocabulary(answer) {
+  const acceptedWords = await getAcceptedWords();
+  const filteredWords = popularWords.getMostPopularFilter(RANKING_VOCAB_SIZE, (word) => {
+    const normalizedWord = normalizeGuess(word);
+
+    return (
+      normalizedWord &&
+      normalizedWord.length >= 3 &&
+      normalizedWord.length <= 16 &&
+      !STOP_WORDS.has(normalizedWord) &&
+      acceptedWords.has(normalizedWord)
+    );
+  });
 
   return [...new Set(filteredWords)];
 }
@@ -465,7 +469,7 @@ function buildRankingVocabulary(answer) {
 function validatePuzzleAnswer(answer, vocabulary) {
   if (!vocabulary.includes(answer)) {
     throw new Error(
-      `Puzzle answer "${answer}" is not in the fixed ranking universe. Choose an answer from the filtered top ${RANKING_VOCAB_SIZE} vocabulary.`
+      `Puzzle answer "${answer}" is not in the fixed ranking universe. Choose an answer from the filtered top ${RANKING_VOCAB_SIZE} popular real-word vocabulary.`
     );
   }
 }
@@ -604,7 +608,7 @@ async function generateSemanticCache(puzzle) {
   );
 
   const answerEmbedding = (await embedTexts([puzzle.answer]))[0];
-  const vocabulary = buildRankingVocabulary(puzzle.answer);
+  const vocabulary = await buildRankingVocabulary(puzzle.answer);
   validatePuzzleAnswer(puzzle.answer, vocabulary);
   const rankedWords = [];
   const startedAt = Date.now();
@@ -675,7 +679,7 @@ async function getSemanticPuzzle() {
   if (!semanticPuzzlePromise) {
     semanticPuzzlePromise = (async () => {
       const puzzle = await loadPuzzle();
-      const vocabulary = buildRankingVocabulary(puzzle.answer);
+      const vocabulary = await buildRankingVocabulary(puzzle.answer);
       validatePuzzleAnswer(puzzle.answer, vocabulary);
 
       try {
