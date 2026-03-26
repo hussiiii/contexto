@@ -61,7 +61,7 @@ const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
-const SCORING_VERSION = "lexical-penalty-v1";
+const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1";
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
@@ -318,6 +318,102 @@ function trigramJaccard(left, right) {
   return intersection / union;
 }
 
+function normalizeFamilyStem(word) {
+  const suffixReplacements = [
+    ["ations", ""],
+    ["ation", ""],
+    ["ments", ""],
+    ["ment", ""],
+    ["ities", "ity"],
+    ["ingly", ""],
+    ["edly", ""],
+    ["ances", ""],
+    ["ance", ""],
+    ["ships", ""],
+    ["ship", ""],
+    ["ness", ""],
+    ["less", ""],
+    ["able", ""],
+    ["ible", ""],
+    ["ally", ""],
+    ["ing", ""],
+    ["ers", ""],
+    ["ies", "y"],
+    ["ied", "y"],
+    ["est", ""],
+    ["er", ""],
+    ["ed", ""],
+    ["ly", ""],
+    ["es", ""],
+    ["s", ""],
+  ];
+
+  let stem = word;
+
+  for (const [suffix, replacement] of suffixReplacements) {
+    if (stem.endsWith(suffix) && stem.length - suffix.length + replacement.length >= 4) {
+      stem = stem.slice(0, -suffix.length) + replacement;
+      break;
+    }
+  }
+
+  return stem;
+}
+
+function isLikelyLexicalFamily(left, right) {
+  if (left === right) {
+    return true;
+  }
+
+  const minLength = Math.min(left.length, right.length);
+  const prefixLength = longestSharedPrefixLength(left, right);
+  const leftStem = normalizeFamilyStem(left);
+  const rightStem = normalizeFamilyStem(right);
+
+  if (leftStem.length >= 4 && leftStem === rightStem) {
+    return true;
+  }
+
+  if (
+    minLength >= 4 &&
+    (left.startsWith(right) || right.startsWith(left)) &&
+    prefixLength >= minLength
+  ) {
+    return true;
+  }
+
+  return (
+    minLength >= 5 &&
+    prefixLength >= minLength - 1 &&
+    trigramJaccard(left, right) >= 0.55
+  );
+}
+
+function getDisplayTopWords(rankedWords, limit = 100) {
+  const topWords = [];
+
+  for (const entry of rankedWords) {
+    const isDuplicateFamily = topWords.some((existingEntry) =>
+      isLikelyLexicalFamily(existingEntry.word, entry.word)
+    );
+
+    if (isDuplicateFamily) {
+      continue;
+    }
+
+    topWords.push(entry);
+
+    if (topWords.length >= limit) {
+      break;
+    }
+  }
+
+  return topWords.map((entry, index) => ({
+    rank: index + 1,
+    word: entry.word,
+  }));
+}
+
 function ensureEmbeddingsClient() {
   if (!openai) {
     throw new Error(
@@ -380,24 +476,46 @@ function computeLexicalPenalty(answer, candidate, semanticScore) {
   }
 
   const maxLength = Math.max(answer.length, candidate.length, 1);
+  const minLength = Math.max(1, Math.min(answer.length, candidate.length));
   const editDistance = levenshteinDistance(answer, candidate);
-  const prefixRatio = longestSharedPrefixLength(answer, candidate) / maxLength;
-  const suffixRatio = longestSharedSuffixLength(answer, candidate) / maxLength;
+  const prefixLength = longestSharedPrefixLength(answer, candidate);
+  const suffixLength = longestSharedSuffixLength(answer, candidate);
+  const prefixRatio = prefixLength / maxLength;
+  const suffixRatio = suffixLength / maxLength;
+  const stemPrefixRatio = prefixLength / minLength;
   const trigramOverlap = trigramJaccard(answer, candidate);
-  const substringPenalty =
-    answer.includes(candidate) || candidate.includes(answer) ? 0.08 : 0;
+  const containsOther = answer.includes(candidate) || candidate.includes(answer);
+  const startsWithOther = answer.startsWith(candidate) || candidate.startsWith(answer);
+  const sameFamily = isLikelyLexicalFamily(answer, candidate);
+  const shortAnswerFactor =
+    answer.length <= 4 ? 1.35 : answer.length === 5 ? 1.22 : answer.length <= 7 ? 1.1 : 1;
 
   let penalty = 0;
 
-  penalty += 0.14 * trigramOverlap;
-  penalty += 0.08 * prefixRatio;
+  penalty += 0.15 * trigramOverlap;
+  penalty += 0.11 * prefixRatio;
   penalty += 0.06 * suffixRatio;
-  penalty += substringPenalty;
+
+  if (containsOther) {
+    penalty += 0.1 * shortAnswerFactor;
+  }
+
+  if (startsWithOther && minLength >= 4) {
+    penalty += 0.09 * shortAnswerFactor;
+  }
+
+  if (stemPrefixRatio >= 0.8 && minLength >= 4) {
+    penalty += 0.07 * shortAnswerFactor;
+  }
+
+  if (sameFamily) {
+    penalty += 0.06 * shortAnswerFactor;
+  }
 
   if (editDistance <= 1) {
-    penalty += 0.15;
+    penalty += 0.16 * shortAnswerFactor;
   } else if (editDistance === 2) {
-    penalty += 0.07;
+    penalty += 0.08 * shortAnswerFactor;
   }
 
   if (candidate.length <= 3) {
@@ -405,13 +523,13 @@ function computeLexicalPenalty(answer, candidate, semanticScore) {
   }
 
   // Let truly strong semantic neighbors retain more of their score.
-  if (semanticScore >= 0.65) {
-    penalty *= 0.65;
-  } else if (semanticScore >= 0.5) {
-    penalty *= 0.82;
+  if (semanticScore >= 0.68) {
+    penalty *= 0.72;
+  } else if (semanticScore >= 0.55) {
+    penalty *= 0.86;
   }
 
-  return Math.min(penalty, 0.22);
+  return Math.min(penalty, 0.32);
 }
 
 function computeAdjustedScore(answer, candidate, semanticScore) {
@@ -775,12 +893,7 @@ app.get("/api/puzzle", async (_req, res) => {
 app.get("/api/top-words", async (_req, res) => {
   try {
     const { semantic } = await getSemanticPuzzle();
-    const topWords = semantic.rankedWords
-      .slice(0, 100)
-      .map((entry, index) => ({
-        rank: index + 1,
-        word: entry.word,
-      }));
+    const topWords = getDisplayTopWords(semantic.rankedWords, 100);
 
     res.json({
       ok: true,
