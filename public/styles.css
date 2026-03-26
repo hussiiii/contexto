@@ -146,19 +146,28 @@ body.modal-open {
 }
 
 .guess-input-row {
-  position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 58px;
+  padding: 7px 8px 7px 18px;
+  border: 2px solid rgba(242, 245, 247, 0.85);
+  border-radius: 12px;
+  background: #2a3948;
 }
 
 .guess-input {
-  display: block;
-  width: 100%;
-  border: 2px solid rgba(242, 245, 247, 0.85);
-  border-radius: 12px;
-  padding: 17px 64px 17px 18px;
-  background: #2a3948;
+  flex: 1;
+  min-width: 0;
+  border: none;
+  padding: 10px 0;
+  background: transparent;
   color: #ffffff;
   font-size: 1.05rem;
+}
+
+.guess-input:focus {
+  outline: none;
 }
 
 .guess-input::placeholder {
@@ -172,11 +181,9 @@ body.modal-open {
 }
 
 .guess-submit-icon {
-  position: absolute;
-  top: 50%;
-  right: 10px;
   width: 42px;
   height: 42px;
+  flex: 0 0 42px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -188,7 +195,6 @@ body.modal-open {
   appearance: none;
   -webkit-appearance: none;
   cursor: pointer;
-  transform: translateY(-50%);
 }
 
 .guess-submit-icon svg {
