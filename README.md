@@ -91,6 +91,15 @@ Gameplay now uses an embeddings API-backed scorer:
 
 This keeps the game shared and deterministic while still allowing much broader user guess input than a tiny hardcoded word list.
 
+### Current ranking behavior
+
+- the fixed ranking universe defaults to `50000` words
+- common low-information stop words such as `the`, `and`, `but`, etc. are filtered out
+- puzzle answers must come from that same filtered ranking universe
+- ranking uses an adjusted score:
+  - semantic similarity from embeddings
+  - minus lexical penalties for edit-distance, substring, and character-overlap traps
+
 ## Turning this into a Discord Activity
 
 This MVP now supports both a normal browser launch and an embedded Discord Activity launch.

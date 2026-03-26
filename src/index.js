@@ -58,14 +58,33 @@ const semanticCacheFilePath = path.join(
 );
 const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
-const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "10000");
+const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
+const SCORING_VERSION = "lexical-penalty-v1";
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
       baseURL: OPENAI_BASE_URL || undefined,
     })
   : null;
+const STOP_WORDS = new Set([
+  "about", "after", "again", "against", "all", "also", "although", "always",
+  "among", "and", "another", "any", "are", "around", "because", "been",
+  "before", "being", "below", "between", "both", "but", "can", "could",
+  "did", "does", "doing", "down", "during", "each", "either", "enough",
+  "even", "every", "few", "for", "from", "further", "had", "has", "have",
+  "having", "here", "hers", "herself", "him", "himself", "his", "how",
+  "however", "into", "its", "itself", "just", "made", "make", "many",
+  "might", "more", "most", "much", "must", "near", "neither", "nor",
+  "not", "off", "often", "once", "only", "onto", "other", "our", "ours",
+  "ourselves", "out", "over", "own", "same", "should", "since", "some",
+  "such", "than", "that", "the", "their", "theirs", "them", "themselves",
+  "then", "there", "these", "they", "this", "those", "through", "too",
+  "toward", "under", "until", "upon", "very", "was", "were", "what",
+  "when", "where", "which", "while", "who", "whom", "whose", "will",
+  "with", "within", "without", "would", "your", "yours", "yourself",
+  "yourselves"
+]);
 
 const app = express();
 app.use(express.json());
@@ -161,6 +180,91 @@ function normalizeGuess(guess) {
     .replace(/[^a-z]/g, "");
 }
 
+function levenshteinDistance(left, right) {
+  if (left === right) {
+    return 0;
+  }
+
+  const rows = left.length + 1;
+  const cols = right.length + 1;
+  const matrix = Array.from({ length: rows }, () => new Array(cols).fill(0));
+
+  for (let row = 0; row < rows; row += 1) {
+    matrix[row][0] = row;
+  }
+
+  for (let col = 0; col < cols; col += 1) {
+    matrix[0][col] = col;
+  }
+
+  for (let row = 1; row < rows; row += 1) {
+    for (let col = 1; col < cols; col += 1) {
+      const cost = left[row - 1] === right[col - 1] ? 0 : 1;
+      matrix[row][col] = Math.min(
+        matrix[row - 1][col] + 1,
+        matrix[row][col - 1] + 1,
+        matrix[row - 1][col - 1] + cost
+      );
+    }
+  }
+
+  return matrix[rows - 1][cols - 1];
+}
+
+function longestSharedPrefixLength(left, right) {
+  const max = Math.min(left.length, right.length);
+  let count = 0;
+
+  while (count < max && left[count] === right[count]) {
+    count += 1;
+  }
+
+  return count;
+}
+
+function longestSharedSuffixLength(left, right) {
+  const max = Math.min(left.length, right.length);
+  let count = 0;
+
+  while (
+    count < max &&
+    left[left.length - 1 - count] === right[right.length - 1 - count]
+  ) {
+    count += 1;
+  }
+
+  return count;
+}
+
+function buildTrigrams(word) {
+  if (word.length < 3) {
+    return new Set([word]);
+  }
+
+  const trigrams = new Set();
+
+  for (let index = 0; index <= word.length - 3; index += 1) {
+    trigrams.add(word.slice(index, index + 3));
+  }
+
+  return trigrams;
+}
+
+function trigramJaccard(left, right) {
+  const leftTrigrams = buildTrigrams(left);
+  const rightTrigrams = buildTrigrams(right);
+  let intersection = 0;
+
+  for (const trigram of leftTrigrams) {
+    if (rightTrigrams.has(trigram)) {
+      intersection += 1;
+    }
+  }
+
+  const union = new Set([...leftTrigrams, ...rightTrigrams]).size || 1;
+  return intersection / union;
+}
+
 function ensureEmbeddingsClient() {
   if (!openai) {
     throw new Error(
@@ -199,13 +303,66 @@ function findRankFromSortedScores(sortedScores, score) {
 function buildRankingVocabulary(answer) {
   const filteredWords = popularWords.getMostPopularFilter(
     RANKING_VOCAB_SIZE,
-    (word) => /^[a-z]+$/.test(word) && word.length >= 3 && word.length <= 16
+    (word) =>
+      /^[a-z]+$/.test(word) &&
+      word.length >= 3 &&
+      word.length <= 16 &&
+      !STOP_WORDS.has(word)
   );
 
-  const uniqueWords = new Set(filteredWords);
-  uniqueWords.add(answer);
+  return [...new Set(filteredWords)];
+}
 
-  return [...uniqueWords];
+function validatePuzzleAnswer(answer, vocabulary) {
+  if (!vocabulary.includes(answer)) {
+    throw new Error(
+      `Puzzle answer "${answer}" is not in the fixed ranking universe. Choose an answer from the filtered top ${RANKING_VOCAB_SIZE} vocabulary.`
+    );
+  }
+}
+
+function computeLexicalPenalty(answer, candidate, semanticScore) {
+  if (answer === candidate) {
+    return 0;
+  }
+
+  const maxLength = Math.max(answer.length, candidate.length, 1);
+  const editDistance = levenshteinDistance(answer, candidate);
+  const prefixRatio = longestSharedPrefixLength(answer, candidate) / maxLength;
+  const suffixRatio = longestSharedSuffixLength(answer, candidate) / maxLength;
+  const trigramOverlap = trigramJaccard(answer, candidate);
+  const substringPenalty =
+    answer.includes(candidate) || candidate.includes(answer) ? 0.15 : 0;
+
+  let penalty = 0;
+
+  penalty += 0.22 * trigramOverlap;
+  penalty += 0.12 * prefixRatio;
+  penalty += 0.1 * suffixRatio;
+  penalty += substringPenalty;
+
+  if (editDistance <= 1) {
+    penalty += 0.25;
+  } else if (editDistance === 2) {
+    penalty += 0.12;
+  }
+
+  if (candidate.length <= 3) {
+    penalty += 0.05;
+  }
+
+  // Let truly strong semantic neighbors retain more of their score.
+  if (semanticScore >= 0.65) {
+    penalty *= 0.45;
+  } else if (semanticScore >= 0.5) {
+    penalty *= 0.7;
+  }
+
+  return penalty;
+}
+
+function computeAdjustedScore(answer, candidate, semanticScore) {
+  return semanticScore - computeLexicalPenalty(answer, candidate, semanticScore);
 }
 
 function normalizeVector(vector) {
@@ -254,6 +411,7 @@ async function persistSemanticCache(semantic) {
       {
         provider: semantic.provider,
         modelId: semantic.modelId,
+        scoringVersion: semantic.scoringVersion,
         puzzleId: semantic.puzzleId,
         answer: semantic.answer,
         answerEmbedding: semantic.answerEmbedding,
@@ -276,6 +434,7 @@ async function generateSemanticCache(puzzle) {
 
   const answerEmbedding = (await embedTexts([puzzle.answer]))[0];
   const vocabulary = buildRankingVocabulary(puzzle.answer);
+  validatePuzzleAnswer(puzzle.answer, vocabulary);
   const rankedWords = [];
 
   for (let index = 0; index < vocabulary.length; index += EMBEDDING_BATCH_SIZE) {
@@ -283,9 +442,15 @@ async function generateSemanticCache(puzzle) {
     const embeddings = await embedTexts(batch);
 
     for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
+      const semanticScore = dotProduct(answerEmbedding, embeddings[batchIndex]);
       rankedWords.push({
         word: batch[batchIndex],
-        score: dotProduct(answerEmbedding, embeddings[batchIndex]),
+        semanticScore,
+        score: computeAdjustedScore(
+          puzzle.answer,
+          batch[batchIndex],
+          semanticScore
+        ),
       });
     }
   }
@@ -295,6 +460,7 @@ async function generateSemanticCache(puzzle) {
   const cache = {
     provider: "openai",
     modelId: OPENAI_EMBEDDING_MODEL,
+    scoringVersion: SCORING_VERSION,
     puzzleId: puzzle.id,
     answer: puzzle.answer,
     answerEmbedding,
@@ -315,6 +481,8 @@ async function getSemanticPuzzle() {
   if (!semanticPuzzlePromise) {
     semanticPuzzlePromise = (async () => {
       const puzzle = await loadPuzzle();
+      const vocabulary = buildRankingVocabulary(puzzle.answer);
+      validatePuzzleAnswer(puzzle.answer, vocabulary);
 
       try {
         const rawCache = await fs.readFile(semanticCacheFilePath, "utf8");
@@ -323,9 +491,10 @@ async function getSemanticPuzzle() {
         if (
           parsedCache.provider === "openai" &&
           parsedCache.modelId === OPENAI_EMBEDDING_MODEL &&
+          parsedCache.scoringVersion === SCORING_VERSION &&
           parsedCache.puzzleId === puzzle.id &&
           parsedCache.answer === puzzle.answer &&
-          parsedCache.vocabularySize === buildRankingVocabulary(puzzle.answer).length
+          parsedCache.vocabularySize === vocabulary.length
         ) {
           return {
             puzzle,
@@ -375,10 +544,15 @@ async function scoreGuess(guess) {
     score = cachedSemanticScore.score;
   } else {
     const [guessEmbedding] = await embedTexts([normalizedGuess]);
-    score = dotProduct(semantic.answerEmbedding, guessEmbedding);
+    const semanticScore = dotProduct(semantic.answerEmbedding, guessEmbedding);
+    score = computeAdjustedScore(puzzle.answer, normalizedGuess, semanticScore);
     rank = findRankFromSortedScores(semantic.sortedScores, score);
 
-    semantic.cachedGuessScoresMap.set(normalizedGuess, { rank, score });
+    semantic.cachedGuessScoresMap.set(normalizedGuess, {
+      rank,
+      score,
+      semanticScore,
+    });
     await persistSemanticCache(semantic);
   }
 
