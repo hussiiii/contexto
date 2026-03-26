@@ -19,6 +19,7 @@ import {
 } from "discord.js";
 import OpenAI from "openai";
 import { words as popularWords } from "popular-english-words";
+import wordListPath from "word-list";
 
 dotenv.config();
 
@@ -103,6 +104,7 @@ const client = new Client({
 const PLAY_BUTTON_ID = "contexto-play";
 const guessScoreCache = new Map();
 let semanticPuzzlePromise;
+let acceptedWordsPromise;
 
 const slashCommands = [
   new SlashCommandBuilder()
@@ -173,11 +175,62 @@ async function loadPuzzle() {
   return JSON.parse(rawPuzzle);
 }
 
+async function getAcceptedWords() {
+  if (!acceptedWordsPromise) {
+    acceptedWordsPromise = (async () => {
+      const rawWords = await fs.readFile(wordListPath, "utf8");
+      const acceptedWords = new Set();
+
+      for (const rawWord of rawWords.split("\n")) {
+        const normalizedWord = normalizeGuess(rawWord);
+
+        if (
+          normalizedWord &&
+          normalizedWord.length >= 3 &&
+          normalizedWord.length <= 16 &&
+          !STOP_WORDS.has(normalizedWord)
+        ) {
+          acceptedWords.add(normalizedWord);
+        }
+      }
+
+      console.log(`Loaded ${acceptedWords.size} accepted guess words.`);
+      return acceptedWords;
+    })();
+  }
+
+  return acceptedWordsPromise;
+}
+
 function normalizeGuess(guess) {
   return String(guess || "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z]/g, "");
+}
+
+function parseGuessInput(rawGuess) {
+  const trimmedGuess = String(rawGuess || "").trim().toLowerCase();
+
+  if (!trimmedGuess) {
+    throw new Error("Type a word to make a guess.");
+  }
+
+  if (/\s/.test(trimmedGuess)) {
+    throw new Error("One word only please.");
+  }
+
+  const normalizedGuess = normalizeGuess(trimmedGuess);
+
+  if (!normalizedGuess) {
+    throw new Error("That doesn't look like a valid word.");
+  }
+
+  if (STOP_WORDS.has(normalizedGuess)) {
+    throw new Error("This word doesn't count, it's too common.");
+  }
+
+  return normalizedGuess;
 }
 
 function levenshteinDistance(left, right) {
@@ -332,33 +385,33 @@ function computeLexicalPenalty(answer, candidate, semanticScore) {
   const suffixRatio = longestSharedSuffixLength(answer, candidate) / maxLength;
   const trigramOverlap = trigramJaccard(answer, candidate);
   const substringPenalty =
-    answer.includes(candidate) || candidate.includes(answer) ? 0.15 : 0;
+    answer.includes(candidate) || candidate.includes(answer) ? 0.08 : 0;
 
   let penalty = 0;
 
-  penalty += 0.22 * trigramOverlap;
-  penalty += 0.12 * prefixRatio;
-  penalty += 0.1 * suffixRatio;
+  penalty += 0.14 * trigramOverlap;
+  penalty += 0.08 * prefixRatio;
+  penalty += 0.06 * suffixRatio;
   penalty += substringPenalty;
 
   if (editDistance <= 1) {
-    penalty += 0.25;
+    penalty += 0.15;
   } else if (editDistance === 2) {
-    penalty += 0.12;
+    penalty += 0.07;
   }
 
   if (candidate.length <= 3) {
-    penalty += 0.05;
+    penalty += 0.03;
   }
 
   // Let truly strong semantic neighbors retain more of their score.
   if (semanticScore >= 0.65) {
-    penalty *= 0.45;
+    penalty *= 0.65;
   } else if (semanticScore >= 0.5) {
-    penalty *= 0.7;
+    penalty *= 0.82;
   }
 
-  return penalty;
+  return Math.min(penalty, 0.22);
 }
 
 function computeAdjustedScore(answer, candidate, semanticScore) {
@@ -436,10 +489,17 @@ async function generateSemanticCache(puzzle) {
   const vocabulary = buildRankingVocabulary(puzzle.answer);
   validatePuzzleAnswer(puzzle.answer, vocabulary);
   const rankedWords = [];
+  const startedAt = Date.now();
+  const totalBatches = Math.ceil(vocabulary.length / EMBEDDING_BATCH_SIZE);
+
+  console.log(
+    `Semantic cache build started: ${vocabulary.length} candidate words across ${totalBatches} batches of up to ${EMBEDDING_BATCH_SIZE}.`
+  );
 
   for (let index = 0; index < vocabulary.length; index += EMBEDDING_BATCH_SIZE) {
     const batch = vocabulary.slice(index, index + EMBEDDING_BATCH_SIZE);
     const embeddings = await embedTexts(batch);
+    const batchNumber = Math.floor(index / EMBEDDING_BATCH_SIZE) + 1;
 
     for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
       const semanticScore = dotProduct(answerEmbedding, embeddings[batchIndex]);
@@ -452,6 +512,19 @@ async function generateSemanticCache(puzzle) {
           semanticScore
         ),
       });
+    }
+
+    const shouldLogProgress =
+      batchNumber === 1 ||
+      batchNumber === totalBatches ||
+      batchNumber % 10 === 0;
+
+    if (shouldLogProgress) {
+      const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+      const percentComplete = ((batchNumber / totalBatches) * 100).toFixed(1);
+      console.log(
+        `Semantic cache progress for "${puzzle.answer}": batch ${batchNumber}/${totalBatches} (${percentComplete}%), ${rankedWords.length} words processed, ${elapsedSeconds}s elapsed.`
+      );
     }
   }
 
@@ -473,7 +546,10 @@ async function generateSemanticCache(puzzle) {
   const hydratedCache = hydrateSemanticCache(cache);
   await persistSemanticCache(hydratedCache);
 
-  console.log("Semantic ranking cache generated.");
+  const totalSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+  console.log(
+    `Semantic ranking cache generated for "${puzzle.answer}" in ${totalSeconds}s.`
+  );
   return hydratedCache;
 }
 
@@ -520,10 +596,11 @@ async function getSemanticPuzzle() {
 }
 
 async function scoreGuess(guess) {
-  const normalizedGuess = normalizeGuess(guess);
+  const normalizedGuess = parseGuessInput(guess);
+  const acceptedWords = await getAcceptedWords();
 
-  if (!normalizedGuess) {
-    throw new Error("Enter a valid word.");
+  if (!acceptedWords.has(normalizedGuess)) {
+    throw new Error("I don't recognize that word.");
   }
 
   const { puzzle, semantic } = await getSemanticPuzzle();
