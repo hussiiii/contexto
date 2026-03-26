@@ -772,6 +772,29 @@ app.get("/api/puzzle", async (_req, res) => {
   }
 });
 
+app.get("/api/top-words", async (_req, res) => {
+  try {
+    const { semantic } = await getSemanticPuzzle();
+    const topWords = semantic.rankedWords
+      .slice(0, 100)
+      .map((entry, index) => ({
+        rank: index + 1,
+        word: entry.word,
+      }));
+
+    res.json({
+      ok: true,
+      topWords,
+    });
+  } catch (error) {
+    console.error("Failed to load top words:", error);
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to load top words.",
+    });
+  }
+});
+
 app.post("/api/guess", async (req, res) => {
   try {
     const result = await scoreGuess(req.body?.guess);

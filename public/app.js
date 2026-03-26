@@ -7,15 +7,19 @@ const guessSubmitButton = document.getElementById("guess-submit-button");
 const statusText = document.getElementById("status");
 const guessInput = document.getElementById("guess-input");
 const guessCountText = document.getElementById("guess-count");
-const vocabCountText = document.getElementById("vocab-count");
 const emptyState = document.getElementById("empty-state");
 const latestGuessSection = document.getElementById("latest-guess-section");
 const latestGuess = document.getElementById("latest-guess");
 const guessList = document.getElementById("guess-list");
 const solveBanner = document.getElementById("solve-banner");
 const solveCopy = document.getElementById("solve-copy");
+const showTopWordsButton = document.getElementById("show-top-words-button");
 const heroDateText = document.getElementById("hero-date");
 const gameDateText = document.getElementById("game-date");
+const topWordsModal = document.getElementById("top-words-modal");
+const closeTopWordsButton = document.getElementById("close-top-words-button");
+const topWordsStatus = document.getElementById("top-words-status");
+const topWordsList = document.getElementById("top-words-list");
 
 const isEmbedded = window.self !== window.top;
 const COMMON_WORDS = new Set([
@@ -46,6 +50,7 @@ let guessedWords = new Set();
 let resultPosted = false;
 let activityLabel = "A player";
 let solvedAnswer = null;
+let topWords = null;
 
 function formatToday() {
   return new Intl.DateTimeFormat("en-US", {
@@ -78,6 +83,72 @@ function setDates() {
 function setStatus(message, type = "neutral") {
   statusText.textContent = message;
   statusText.dataset.state = type;
+}
+
+function renderTopWords(entries) {
+  topWordsList.innerHTML = "";
+
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    row.className = "top-word-row";
+
+    const rank = document.createElement("span");
+    rank.className = "top-word-rank";
+    rank.textContent = String(entry.rank);
+
+    const word = document.createElement("span");
+    word.className = "top-word-value";
+    word.textContent = entry.word;
+
+    row.append(rank, word);
+    topWordsList.append(row);
+  }
+}
+
+function openTopWordsModal() {
+  topWordsModal.hidden = false;
+  document.body.classList.add("modal-open");
+}
+
+function closeTopWordsModal() {
+  topWordsModal.hidden = true;
+  document.body.classList.remove("modal-open");
+}
+
+async function loadTopWords() {
+  if (topWords) {
+    renderTopWords(topWords);
+    topWordsStatus.hidden = true;
+    return;
+  }
+
+  topWordsStatus.hidden = false;
+  topWordsStatus.textContent = "Loading...";
+  topWordsList.innerHTML = "";
+
+  const response = await fetch("/api/top-words");
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Failed to load top words.");
+  }
+
+  topWords = data.topWords || [];
+  renderTopWords(topWords);
+  topWordsStatus.hidden = topWords.length > 0;
+  topWordsStatus.textContent = topWords.length > 0 ? "" : "No words available.";
+}
+
+async function showTopWords() {
+  openTopWordsModal();
+
+  try {
+    await loadTopWords();
+  } catch (error) {
+    topWordsStatus.hidden = false;
+    topWordsStatus.textContent =
+      error instanceof Error ? error.message : "Failed to load top words.";
+  }
 }
 
 function normalizeClientGuessInput(rawGuess) {
@@ -187,6 +258,7 @@ function renderGuesses() {
 function setSolvedState(answer) {
   solveBanner.hidden = false;
   solveCopy.textContent = `The answer was "${answer}". You solved today's puzzle in ${guesses.length} guesses.`;
+  showTopWordsButton.hidden = false;
   guessInput.disabled = true;
   guessSubmitButton.disabled = true;
 }
@@ -200,7 +272,6 @@ async function loadPuzzle() {
   }
 
   puzzle = data.puzzle;
-  vocabCountText.textContent = `${puzzle.totalRankedWords} ranked words`;
   setDates();
 }
 
@@ -373,3 +444,15 @@ bootstrap();
 playTodayButton.addEventListener("click", () => showScreen("game"));
 backButton.addEventListener("click", () => showScreen("home"));
 guessForm.addEventListener("submit", submitGuess);
+showTopWordsButton.addEventListener("click", showTopWords);
+closeTopWordsButton.addEventListener("click", closeTopWordsModal);
+topWordsModal.addEventListener("click", (event) => {
+  if (event.target === topWordsModal) {
+    closeTopWordsModal();
+  }
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !topWordsModal.hidden) {
+    closeTopWordsModal();
+  }
+});

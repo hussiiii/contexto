@@ -44,15 +44,29 @@
               placeholder="type a word"
               autocomplete="off"
             />
+            <button
+              id="guess-submit-button"
+              class="guess-submit-icon"
+              type="submit"
+              aria-label="Submit guess"
+            >
+              &#9654;
+            </button>
           </label>
-          <button id="guess-submit-button" class="primary-button" type="submit">
-            Submit Guess
-          </button>
+          <p id="status" class="status">Ready.</p>
         </form>
 
         <section id="solve-banner" class="solve-banner" hidden>
           <h3 class="solve-title">You solved it!</h3>
           <p id="solve-copy" class="solve-copy"></p>
+          <button
+            id="show-top-words-button"
+            class="secondary-button solve-action-button"
+            type="button"
+            hidden
+          >
+            Show Top 100 Similar Words
+          </button>
         </section>
 
         <section id="latest-guess-section" class="results-section" hidden>
@@ -65,7 +79,6 @@
         <section class="results-section">
           <div class="results-header">
             <h3 class="section-title">Guesses</h3>
-            <span id="vocab-count" class="results-meta"></span>
           </div>
           <div id="empty-state" class="empty-state">
             No guesses yet. Try words like <code>water</code>, <code>beach</code>,
@@ -92,10 +105,34 @@
             </p>
           </div>
         </section>
-
-        <p id="status" class="status">Ready.</p>
       </section>
     </main>
+
+    <div id="top-words-modal" class="modal-backdrop" hidden>
+      <section
+        class="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="top-words-title"
+      >
+        <div class="modal-header">
+          <div>
+            <h3 id="top-words-title" class="modal-title">Top 100 Similar Words</h3>
+            <p class="modal-subtitle">The closest words in today's ranking universe.</p>
+          </div>
+          <button
+            id="close-top-words-button"
+            class="icon-button modal-close-button"
+            type="button"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+        <div id="top-words-status" class="modal-status">Loading...</div>
+        <div id="top-words-list" class="top-words-list"></div>
+      </section>
+    </div>
 
     <script type="module" src="/app.js"></script>
   </body>
