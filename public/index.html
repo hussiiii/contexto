@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Contexto MVP</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section id="home-screen" class="screen screen-active">
+        <div class="hero-card">
+          <p class="hero-date" id="hero-date">03/25/2026</p>
+          <h1 class="hero-title">Contexto</h1>
+          <p class="hero-subtitle">Daily puzzle in Discord</p>
+          <button id="play-today-button" class="primary-button" type="button">
+            Play Today's Puzzle
+          </button>
+        </div>
+      </section>
+
+      <section id="game-screen" class="screen game-screen">
+        <header class="game-header">
+          <button id="back-button" class="icon-button" type="button" aria-label="Back">
+            &larr;
+          </button>
+          <h2 class="game-title">Contexto</h2>
+          <button class="icon-button" type="button" aria-label="Menu" disabled>
+            &#8942;
+          </button>
+        </header>
+
+        <div class="game-stats">
+          <span id="game-date">03/25/2026</span>
+          <span>Guesses: <strong id="guess-count">0</strong></span>
+        </div>
+
+        <form id="guess-form" class="guess-form">
+          <label class="guess-input-wrap">
+            <input
+              id="guess-input"
+              class="guess-input"
+              name="guess"
+              placeholder="type a word"
+              autocomplete="off"
+            />
+          </label>
+          <button id="guess-submit-button" class="primary-button" type="submit">
+            Submit Guess
+          </button>
+        </form>
+
+        <section id="solve-banner" class="solve-banner" hidden>
+          <h3 class="solve-title">You solved it!</h3>
+          <p id="solve-copy" class="solve-copy"></p>
+        </section>
+
+        <section id="latest-guess-section" class="results-section" hidden>
+          <div class="results-header">
+            <h3 class="section-title">Last Guess</h3>
+          </div>
+          <div id="latest-guess"></div>
+        </section>
+
+        <section class="results-section">
+          <div class="results-header">
+            <h3 class="section-title">Guesses</h3>
+            <span id="vocab-count" class="results-meta"></span>
+          </div>
+          <div id="empty-state" class="empty-state">
+            No guesses yet. Try words like <code>water</code>, <code>beach</code>,
+            or <code>storm</code>.
+          </div>
+          <div id="guess-list" class="guess-list"></div>
+        </section>
+
+        <section class="panel">
+          <h3 class="panel-title">How to play</h3>
+          <div class="panel-copy">
+            <p>Find the secret word. You have unlimited guesses.</p>
+            <p>
+              The words are sorted by an artificial intelligence algorithm
+              according to how similar they are to the secret word.
+            </p>
+            <p>
+              After submitting a word, you will see its position. The secret
+              word is number 1.
+            </p>
+            <p>
+              The algorithm analyzed thousands of texts. It uses the context in
+              which words are used to calculate the similarity between them.
+            </p>
+          </div>
+        </section>
+
+        <p id="status" class="status">Ready.</p>
+      </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+  </html>
