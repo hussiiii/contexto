@@ -36,13 +36,14 @@
         </div>
 
         <form id="guess-form" class="guess-form">
-          <label class="guess-input-wrap">
+          <div class="guess-input-row">
             <input
               id="guess-input"
               class="guess-input"
               name="guess"
               placeholder="type a word"
               autocomplete="off"
+              aria-label="Type a guess"
             />
             <button
               id="guess-submit-button"
@@ -50,9 +51,14 @@
               type="submit"
               aria-label="Submit guess"
             >
-              &#9654;
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  d="M3 20.5L21 12 3 3.5l2.9 6.7L16 12 5.9 13.8 3 20.5z"
+                  fill="currentColor"
+                />
+              </svg>
             </button>
-          </label>
+          </div>
           <p id="status" class="status">Ready.</p>
         </form>
 

@@ -145,12 +145,13 @@ body.modal-open {
   text-transform: uppercase;
 }
 
-.guess-input-wrap {
+.guess-input-row {
   position: relative;
   display: block;
 }
 
 .guess-input {
+  display: block;
   width: 100%;
   border: 2px solid rgba(242, 245, 247, 0.85);
   border-radius: 12px;
@@ -184,11 +185,16 @@ body.modal-open {
   padding: 0;
   background: #e8eef6;
   color: #16212b;
-  font-size: 1rem;
-  font-weight: 900;
-  line-height: 1;
+  appearance: none;
+  -webkit-appearance: none;
   cursor: pointer;
   transform: translateY(-50%);
+}
+
+.guess-submit-icon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .guess-submit-icon:hover {
