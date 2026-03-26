@@ -57,6 +57,10 @@ const semanticCacheFilePath = path.join(
   generatedDataDirectory,
   "sample-semantic-cache.json"
 );
+const allowedAnswersFilePath = path.join(
+  generatedDataDirectory,
+  "allowed-answers.json"
+);
 const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
@@ -105,6 +109,7 @@ const PLAY_BUTTON_ID = "contexto-play";
 const guessScoreCache = new Map();
 let semanticPuzzlePromise;
 let acceptedWordsPromise;
+let allowedAnswersPromise;
 
 const slashCommands = [
   new SlashCommandBuilder()
@@ -449,7 +454,7 @@ function findRankFromSortedScores(sortedScores, score) {
   return low + 1;
 }
 
-async function buildRankingVocabulary(answer) {
+async function buildRankingVocabulary() {
   const acceptedWords = await getAcceptedWords();
   const filteredWords = popularWords.getMostPopularFilter(RANKING_VOCAB_SIZE, (word) => {
     const normalizedWord = normalizeGuess(word);
@@ -466,10 +471,42 @@ async function buildRankingVocabulary(answer) {
   return [...new Set(filteredWords)];
 }
 
-function validatePuzzleAnswer(answer, vocabulary) {
-  if (!vocabulary.includes(answer)) {
+async function getAllowedAnswers() {
+  if (!allowedAnswersPromise) {
+    allowedAnswersPromise = (async () => {
+      let parsedAnswers;
+
+      try {
+        const rawAnswers = await fs.readFile(allowedAnswersFilePath, "utf8");
+        const parsed = JSON.parse(rawAnswers);
+        parsedAnswers = Array.isArray(parsed) ? parsed : parsed.words;
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          throw new Error(
+            "Missing curated answer list. Run `npm run generate:answers` to create data/generated/allowed-answers.json."
+          );
+        }
+
+        throw error;
+      }
+
+      if (!Array.isArray(parsedAnswers) || parsedAnswers.length === 0) {
+        throw new Error(
+          "Curated answer list is empty or invalid. Re-run `npm run generate:answers`."
+        );
+      }
+
+      return new Set(parsedAnswers.map((word) => normalizeGuess(word)).filter(Boolean));
+    })();
+  }
+
+  return allowedAnswersPromise;
+}
+
+function validatePuzzleAnswer(answer, allowedAnswers) {
+  if (!allowedAnswers.has(answer)) {
     throw new Error(
-      `Puzzle answer "${answer}" is not in the fixed ranking universe. Choose an answer from the filtered top ${RANKING_VOCAB_SIZE} popular real-word vocabulary.`
+      `Puzzle answer "${answer}" is not in the curated allowed answer list. Choose an answer from data/generated/allowed-answers.json.`
     );
   }
 }
@@ -608,8 +645,11 @@ async function generateSemanticCache(puzzle) {
   );
 
   const answerEmbedding = (await embedTexts([puzzle.answer]))[0];
-  const vocabulary = await buildRankingVocabulary(puzzle.answer);
-  validatePuzzleAnswer(puzzle.answer, vocabulary);
+  const [allowedAnswers, vocabulary] = await Promise.all([
+    getAllowedAnswers(),
+    buildRankingVocabulary(),
+  ]);
+  validatePuzzleAnswer(puzzle.answer, allowedAnswers);
   const rankedWords = [];
   const startedAt = Date.now();
   const totalBatches = Math.ceil(vocabulary.length / EMBEDDING_BATCH_SIZE);
@@ -679,8 +719,11 @@ async function getSemanticPuzzle() {
   if (!semanticPuzzlePromise) {
     semanticPuzzlePromise = (async () => {
       const puzzle = await loadPuzzle();
-      const vocabulary = await buildRankingVocabulary(puzzle.answer);
-      validatePuzzleAnswer(puzzle.answer, vocabulary);
+      const [allowedAnswers, vocabulary] = await Promise.all([
+        getAllowedAnswers(),
+        buildRankingVocabulary(),
+      ]);
+      validatePuzzleAnswer(puzzle.answer, allowedAnswers);
 
       try {
         const rawCache = await fs.readFile(semanticCacheFilePath, "utf8");

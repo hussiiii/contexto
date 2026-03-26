@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "generate:answers": "node scripts/build-answer-list.js"
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.4.1",
