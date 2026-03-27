@@ -1,4 +1,4 @@
 node_modules
 .env
 data/generated/*
-!data/generated/allowed-answers.json
+!data/generated/answers.json

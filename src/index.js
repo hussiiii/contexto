@@ -57,9 +57,9 @@ const semanticCacheFilePath = path.join(
   generatedDataDirectory,
   "sample-semantic-cache.json"
 );
-const allowedAnswersFilePath = path.join(
+const answersFilePath = path.join(
   generatedDataDirectory,
-  "allowed-answers.json"
+  "answers.json"
 );
 const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
@@ -477,13 +477,13 @@ async function getAllowedAnswers() {
       let parsedAnswers;
 
       try {
-        const rawAnswers = await fs.readFile(allowedAnswersFilePath, "utf8");
+        const rawAnswers = await fs.readFile(answersFilePath, "utf8");
         const parsed = JSON.parse(rawAnswers);
         parsedAnswers = Array.isArray(parsed) ? parsed : parsed.words;
       } catch (error) {
         if (error?.code === "ENOENT") {
           throw new Error(
-            "Missing curated answer list. Run `npm run generate:answers` to create data/generated/allowed-answers.json."
+            "Missing answer list. Add data/generated/answers.json with your ordered puzzle answers."
           );
         }
 
@@ -492,7 +492,7 @@ async function getAllowedAnswers() {
 
       if (!Array.isArray(parsedAnswers) || parsedAnswers.length === 0) {
         throw new Error(
-          "Curated answer list is empty or invalid. Re-run `npm run generate:answers`."
+          "Answer list is empty or invalid. Check data/generated/answers.json."
         );
       }
 
@@ -506,7 +506,7 @@ async function getAllowedAnswers() {
 function validatePuzzleAnswer(answer, allowedAnswers) {
   if (!allowedAnswers.has(answer)) {
     throw new Error(
-      `Puzzle answer "${answer}" is not in the curated allowed answer list. Choose an answer from data/generated/allowed-answers.json.`
+      `Puzzle answer "${answer}" is not in data/generated/answers.json. Choose an answer from your ordered answer list.`
     );
   }
 }

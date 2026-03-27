@@ -16,10 +16,10 @@ Minimal starter for a Discord-based Contexto prototype:
 ## Project structure
 
 - `src/index.js`: bot + API server
-- `scripts/build-answer-list.js`: one-time curated answer list generator
 - `public/index.html`: minimal UI
 - `public/app.js`: button logic
 - `public/styles.css`: simple styling
+- `data/generated/answers.json`: ordered answer list used by the app
 
 ## Setup
 
@@ -35,13 +35,7 @@ Minimal starter for a Discord-based Contexto prototype:
    cp .env.example .env
    ```
 
-3. Generate the curated answer list:
-
-   ```bash
-   npm run generate:answers
-   ```
-
-   This creates `data/generated/allowed-answers.json`, which the app uses to validate secret words.
+3. Make sure `data/generated/answers.json` exists and contains your ordered puzzle answers.
 
 4. Start the app:
 
@@ -63,10 +57,6 @@ On the first run, the server will call the embeddings API to build a cached rank
 - `OPENAI_EMBEDDING_MODEL`: embeddings model to use, defaults to `text-embedding-3-small`
 - `OPENAI_BASE_URL`: optional, for OpenAI-compatible providers
 - `RANKING_VOCAB_SIZE`: size of the fixed ranking universe used for deterministic ranks
-- `ANSWER_TARGET_COUNT`: number of curated secret-answer words to keep
-- `ANSWER_CANDIDATE_POOL_SIZE`: number of popular real-word candidates to review during answer generation
-- `ANSWER_SCORING_BATCH_SIZE`: batch size for the answer-list scoring pass
-- `ANSWER_SCORING_MODEL`: OpenAI model used to score candidate answer quality
 
 ## Current test flows
 
@@ -109,33 +99,18 @@ This keeps the game shared and deterministic while still allowing much broader u
 - the fixed ranking universe defaults to `50000` words
 - that universe is now built from `popular-english-words`, filtered through `word-list`
 - common low-information stop words such as `the`, `and`, `but`, etc. are filtered out
-- puzzle answers must come from the generated curated answer list in `data/generated/allowed-answers.json`
+- puzzle answers must come from the ordered answer list in `data/generated/answers.json`
 - ranking uses an adjusted score:
   - semantic similarity from embeddings
   - minus lexical penalties for edit-distance, substring, and character-overlap traps
 
-### Curated answer generation
+### Curated answers
 
-Use the generator any time you want to refresh the set of valid secret words:
+The app reads its valid secret words from `data/generated/answers.json`.
 
-```bash
-npm run generate:answers
-```
-
-What it does:
-
-- builds a candidate pool from the most popular words that also exist in `word-list`
-- filters out stopwords and anything listed in `data/filters/blocked-answer-words.txt`
-- uses an OpenAI model to score which candidates make strong Contexto-style answer words
-- writes:
-  - `data/generated/allowed-answers.json`: the final curated answer list used at runtime
-  - `data/generated/answer-candidate-scores.json`: detailed generation output for inspection
-
-Recommended workflow:
-
-1. Run `npm run generate:answers`.
-2. Spot-check a handful of generated words instead of manually reviewing all `10,000`.
-3. Commit `data/generated/allowed-answers.json` so production has the same answer universe.
+- keep this file committed so production and local stay in sync
+- the order matters if you want to use it as a day-by-day answer schedule
+- `data/puzzles/sample.json` can still point at a current test answer, but that answer must exist in `answers.json`
 
 ## Turning this into a Discord Activity
 
