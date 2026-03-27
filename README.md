@@ -65,16 +65,12 @@ On the first run, the server will call the embeddings API to build a cached rank
 Use:
 
 ```text
-/contexto-test
-/contexto-play
 /contexto-post
 ```
 
-- `/contexto-test`: send a bot test message
-- `/contexto-play`: launch the Contexto activity directly
 - `/contexto-post`: post a text-channel prompt with a `Play Contexto` button
 
-`/contexto-test` and `/contexto-post` both support an optional channel override.
+`/contexto-post` supports an optional channel override.
 
 ### Web UI
 

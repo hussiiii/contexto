@@ -54,14 +54,11 @@ const COMMON_WORDS = new Set([
   "yourselves"
 ]);
 
-let requestedBy = "contexto-web-ui";
 let launchChannelId = null;
 let currentScreen = "home";
 let puzzle = null;
 let guesses = [];
 let guessedWords = new Set();
-let resultPosted = false;
-let activityLabel = "A player";
 let solvedAnswer = null;
 let topWords = null;
 let gameFinished = false;
@@ -165,15 +162,6 @@ function getOrCreateLocalPlayer() {
   return generatedPlayer;
 }
 
-function buildDiscordAvatarUrl(user) {
-  if (!user?.id || !user?.avatar) {
-    return null;
-  }
-
-  const extension = user.avatar.startsWith("a_") ? "gif" : "png";
-  return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${extension}?size=128`;
-}
-
 function buildPlayerPayload() {
   if (!currentPlayer) {
     return null;
@@ -235,7 +223,6 @@ function storeSessionToken(sessionToken) {
 function resetGameState() {
   guesses = [];
   guessedWords = new Set();
-  resultPosted = false;
   solvedAnswer = null;
   topWords = null;
   gameFinished = false;
@@ -701,7 +688,6 @@ async function authorizeWithDiscord(config, promptMode) {
 async function initializeDiscordSdk(config) {
   if (!isEmbedded) {
     currentPlayer = getOrCreateLocalPlayer();
-    activityLabel = currentPlayer.displayName;
     return;
   }
 
@@ -718,9 +704,7 @@ async function initializeDiscordSdk(config) {
     }),
   ]);
 
-  requestedBy = "contexto-activity-ui";
   launchChannelId = discordSdk.channelId;
-  activityLabel = "A Discord player";
   await reportClientLog("info", "Discord SDK ready.", {
     channelId: launchChannelId,
     guildId: discordSdk.guildId,
@@ -752,7 +736,6 @@ async function initializeDiscordSdk(config) {
       if (restoredPlayer) {
         currentPlayer = restoredPlayer;
         storeSessionToken(storedSessionToken);
-        activityLabel = currentPlayer.displayName;
         await reportClientLog("info", "Restored existing app session.", {
           userId: currentPlayer.userId,
           displayName: currentPlayer.displayName,
@@ -799,7 +782,6 @@ async function initializeDiscordSdk(config) {
   const login = await loginWithDiscordCode(code);
   currentPlayer = login.player;
   storeSessionToken(login.sessionToken);
-  activityLabel = currentPlayer.displayName;
   await reportClientLog("info", "Discord login succeeded.", {
     userId: currentPlayer.userId,
     displayName: currentPlayer.displayName,
@@ -835,7 +817,6 @@ async function loadSavedProgress() {
   guesses = Array.isArray(progress.guesses) ? progress.guesses : [];
   guessedWords = new Set(guesses.map((entry) => entry.guess));
   solvedAnswer = progress.solvedAnswer || null;
-  resultPosted = Boolean(progress.resultPosted);
   renderGuesses();
 
   if (solvedAnswer) {
@@ -843,45 +824,6 @@ async function loadSavedProgress() {
       solved: !progress.gaveUp,
       celebrate: false,
     });
-  }
-}
-
-async function postResult() {
-  if (!puzzle || getScoreGuessCount() === 0 || !solvedAnswer) {
-    return;
-  }
-
-  setStatus("Posting result...");
-
-  try {
-    const response = await fetch("/api/post-result", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        channelId: launchChannelId || undefined,
-        requestedBy: activityLabel,
-        guessCount: getScoreGuessCount(),
-        bestRank: bestRank(),
-        answer: solvedAnswer,
-        ...buildAuthPayload(),
-      }),
-    });
-
-    const data = await response.json();
-
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || "Request failed.");
-    }
-
-    resultPosted = true;
-    setStatus(`Posted result to channel ${data.channelId}.`, "success");
-  } catch (error) {
-    setStatus(
-      error instanceof Error ? error.message : "Failed to post result.",
-      "error"
-    );
   }
 }
 
@@ -1021,12 +963,6 @@ async function submitGuess(event) {
       freshSolve: Boolean(data.freshSolve),
     });
     setStatus(result.status, result.statusType);
-
-    if (result.solved) {
-      if (!resultPosted) {
-        await postResult();
-      }
-    }
   } catch (error) {
     setStatus(
       error instanceof Error ? error.message : "Failed to submit guess.",

@@ -7,6 +7,7 @@ import dotenv from "dotenv";
 import express from "express";
 import {
   ActionRowBuilder,
+  AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
@@ -21,6 +22,7 @@ import {
 import OpenAI from "openai";
 import { Pool } from "pg";
 import { words as popularWords } from "popular-english-words";
+import sharp from "sharp";
 
 dotenv.config();
 
@@ -123,27 +125,13 @@ const client = new Client({
 
 const PLAY_BUTTON_ID = "contexto-play";
 const guessScoreCache = new Map();
+const avatarDataUriCache = new Map();
 let semanticPuzzlePromise;
 let acceptedWordsPromise;
 let allowedAnswersPromise;
 let progressStorageReadyPromise;
 
 const slashCommands = [
-  new SlashCommandBuilder()
-    .setName("contexto-test")
-    .setDescription("Send a test message from the Contexto MVP bot.")
-    .addChannelOption((option) =>
-      option
-        .setName("channel")
-        .setDescription("Optional channel override for the test message.")
-        .addChannelTypes(ChannelType.GuildText)
-        .setRequired(false)
-    )
-    .toJSON(),
-  new SlashCommandBuilder()
-    .setName("contexto-play")
-    .setDescription("Launch the Contexto activity in Discord.")
-    .toJSON(),
   new SlashCommandBuilder()
     .setName("contexto-post")
     .setDescription("Post a Contexto play prompt into a text channel.")
@@ -166,30 +154,6 @@ async function registerGuildCommands() {
   );
 
   console.log("Registered guild slash commands.");
-}
-
-async function sendTestMessage({ channelId, requestedBy = "web-ui" }) {
-  const targetChannelId = channelId || DEFAULT_CHANNEL_ID;
-
-  if (!targetChannelId) {
-    throw new Error(
-      "No channel ID provided. Set DEFAULT_CHANNEL_ID or pass channelId in the request."
-    );
-  }
-
-  const channel = await client.channels.fetch(targetChannelId);
-
-  if (!channel || !channel.isTextBased()) {
-    throw new Error("Target channel is missing or is not a text channel.");
-  }
-
-  const content = `Test\nTriggered by: ${requestedBy}`;
-  await channel.send({ content });
-
-  return {
-    channelId: targetChannelId,
-    content,
-  };
 }
 
 async function loadPuzzle() {
@@ -249,6 +213,18 @@ async function ensureProgressStorage() {
       await progressPool.query(`
         CREATE INDEX IF NOT EXISTS app_sessions_user_id_idx
         ON app_sessions (user_id)
+      `);
+      await progressPool.query(`
+        CREATE TABLE IF NOT EXISTS player_progress_messages (
+          user_id TEXT NOT NULL,
+          puzzle_id TEXT NOT NULL,
+          guild_id TEXT,
+          channel_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, puzzle_id, channel_id)
+        )
       `);
       await progressPool.query(`
         DELETE FROM app_sessions
@@ -569,6 +545,301 @@ async function savePlayerProgress({
       normalizedSolvedAnswer
     )}, gaveUp=${gaveUp}, resultPosted=${resultPosted}.`
   );
+}
+
+function createEmptyProgressState() {
+  return {
+    guesses: [],
+    solvedAnswer: null,
+    gaveUp: false,
+    resultPosted: false,
+    guessCount: 0,
+    hintCount: 0,
+    bestRank: null,
+  };
+}
+
+function getGuessTone(rank) {
+  if (rank <= 100) {
+    return "green";
+  }
+
+  if (rank <= 500) {
+    return "yellow";
+  }
+
+  return "red";
+}
+
+function summarizePlayerProgress(progress) {
+  const normalizedProgress = progress || createEmptyProgressState();
+  const guesses = normalizeStoredGuesses(normalizedProgress.guesses);
+  const scoredGuesses = guesses.filter((entry) => entry.countsTowardScore !== false);
+  const toneCounts = {
+    green: 0,
+    yellow: 0,
+    red: 0,
+  };
+
+  for (const entry of scoredGuesses) {
+    toneCounts[getGuessTone(entry.rank)] += 1;
+  }
+
+  const status = normalizedProgress.gaveUp
+    ? "Gave up"
+    : normalizedProgress.solvedAnswer
+      ? "Solved"
+      : "Attempted";
+
+  return {
+    status,
+    guessCount: scoredGuesses.length,
+    hintCount: scoredGuesses.filter((entry) => entry.hinted).length,
+    greenCount: toneCounts.green,
+    yellowCount: toneCounts.yellow,
+    redCount: toneCounts.red,
+  };
+}
+
+function escapeXml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function getPlayerInitials(player) {
+  const source = String(player?.displayName || "Player").trim();
+  const parts = source.split(/\s+/).filter(Boolean).slice(0, 2);
+
+  if (parts.length === 0) {
+    return "P";
+  }
+
+  return parts.map((part) => part[0]?.toUpperCase() || "").join("").slice(0, 2) || "P";
+}
+
+async function getAvatarDataUri(avatarUrl) {
+  const normalizedUrl = normalizeOptionalText(avatarUrl, 500);
+
+  if (!normalizedUrl) {
+    return null;
+  }
+
+  if (avatarDataUriCache.has(normalizedUrl)) {
+    return avatarDataUriCache.get(normalizedUrl);
+  }
+
+  try {
+    const response = await fetch(normalizedUrl);
+
+    if (!response.ok) {
+      throw new Error(`Avatar request failed with ${response.status}.`);
+    }
+
+    const contentType = response.headers.get("content-type") || "image/png";
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const dataUri = `data:${contentType};base64,${buffer.toString("base64")}`;
+    avatarDataUriCache.set(normalizedUrl, dataUri);
+    return dataUri;
+  } catch (error) {
+    console.warn("Failed to fetch Discord avatar for progress card:", error);
+    avatarDataUriCache.set(normalizedUrl, null);
+    return null;
+  }
+}
+
+function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri }) {
+  const badgeColors =
+    summary.status === "Solved"
+      ? { fill: "#153b2d", stroke: "#1f9d68", text: "#58d69e" }
+      : summary.status === "Gave up"
+        ? { fill: "#3d1f29", stroke: "#ff6b8c", text: "#ff9eb3" }
+        : { fill: "#232a4a", stroke: "#6f8cff", text: "#b4c0ff" };
+
+  const avatarMarkup = avatarDataUri
+    ? `<image href="${avatarDataUri}" x="54" y="70" width="128" height="128" clip-path="url(#avatar-clip)" preserveAspectRatio="xMidYMid slice" />`
+    : `
+      <circle cx="118" cy="134" r="64" fill="#2b2b34" />
+      <text x="118" y="148" text-anchor="middle" font-size="42" font-weight="700" fill="#f4f4f5">${escapeXml(
+        getPlayerInitials(player)
+      )}</text>
+    `;
+
+  return `
+    <svg width="960" height="360" viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <clipPath id="avatar-clip">
+          <circle cx="118" cy="134" r="64" />
+        </clipPath>
+      </defs>
+      <rect width="960" height="360" rx="28" fill="#121215" />
+      <rect x="18" y="18" width="924" height="324" rx="24" fill="#17171c" stroke="#2c2c33" stroke-width="2" />
+      <text x="54" y="48" font-size="20" font-weight="700" fill="#e6e6eb">Contexto</text>
+      <text x="165" y="48" font-size="20" fill="#a8a8b3">${escapeXml(puzzle?.date || "")}</text>
+
+      ${avatarMarkup}
+      <circle cx="118" cy="134" r="64" fill="none" stroke="#35353d" stroke-width="4" />
+
+      <text x="214" y="106" font-size="34" font-weight="700" fill="#f4f4f5">${escapeXml(
+        player?.displayName || "Player"
+      )}</text>
+      <rect x="214" y="124" width="148" height="40" rx="20" fill="${badgeColors.fill}" stroke="${badgeColors.stroke}" />
+      <text x="288" y="150" text-anchor="middle" font-size="20" font-weight="700" fill="${badgeColors.text}">${escapeXml(
+        summary.status
+      )}</text>
+
+      <text x="214" y="205" font-size="18" fill="#9d9daa">Guesses</text>
+      <text x="214" y="250" font-size="46" font-weight="700" fill="#ffffff">${summary.guessCount}</text>
+
+      <text x="386" y="205" font-size="18" fill="#9d9daa">Hints Used</text>
+      <text x="386" y="250" font-size="46" font-weight="700" fill="#ffffff">${summary.hintCount}</text>
+
+      <rect x="560" y="92" width="330" height="196" rx="22" fill="#101013" stroke="#303039" />
+
+      <rect x="598" y="132" width="28" height="28" rx="8" fill="#14b87a" />
+      <text x="646" y="153" font-size="24" font-weight="700" fill="#ffffff">${summary.greenCount}</text>
+      <text x="690" y="153" font-size="18" fill="#9d9daa">Top 100</text>
+
+      <rect x="598" y="178" width="28" height="28" rx="8" fill="#f57c2c" />
+      <text x="646" y="199" font-size="24" font-weight="700" fill="#ffffff">${summary.yellowCount}</text>
+      <text x="690" y="199" font-size="18" fill="#9d9daa">101-500</text>
+
+      <rect x="598" y="224" width="28" height="28" rx="8" fill="#ff2f92" />
+      <text x="646" y="245" font-size="24" font-weight="700" fill="#ffffff">${summary.redCount}</text>
+      <text x="690" y="245" font-size="18" fill="#9d9daa">501+</text>
+    </svg>
+  `;
+}
+
+async function renderProgressCardBuffer({ player, puzzle, progress }) {
+  const summary = summarizePlayerProgress(progress);
+  const avatarDataUri = await getAvatarDataUri(player?.avatarUrl);
+  const svg = buildProgressCardSvg({
+    player,
+    puzzle,
+    summary,
+    avatarDataUri,
+  });
+
+  return {
+    summary,
+    buffer: await sharp(Buffer.from(svg)).png().toBuffer(),
+  };
+}
+
+function buildProgressMessageContent({ player, summary }) {
+  return [
+    `${player.displayName} • ${summary.status}`,
+    `Guesses: ${summary.guessCount} • Hints: ${summary.hintCount}`,
+    `🟩 ${summary.greenCount}  🟨 ${summary.yellowCount}  🟥 ${summary.redCount}`,
+  ].join("\n");
+}
+
+async function loadProgressMessageRecord({ userId, puzzleId, channelId }) {
+  if (!progressPool || !userId || !puzzleId || !channelId) {
+    return null;
+  }
+
+  const result = await progressPool.query(
+    `
+      SELECT message_id
+      FROM player_progress_messages
+      WHERE user_id = $1 AND puzzle_id = $2 AND channel_id = $3
+      LIMIT 1
+    `,
+    [userId, puzzleId, channelId]
+  );
+
+  return result.rows[0]?.message_id || null;
+}
+
+async function saveProgressMessageRecord({ userId, puzzleId, guildId, channelId, messageId }) {
+  if (!progressPool || !userId || !puzzleId || !channelId || !messageId) {
+    return;
+  }
+
+  await progressPool.query(
+    `
+      INSERT INTO player_progress_messages (
+        user_id,
+        puzzle_id,
+        guild_id,
+        channel_id,
+        message_id
+      )
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (user_id, puzzle_id, channel_id)
+      DO UPDATE SET
+        guild_id = EXCLUDED.guild_id,
+        message_id = EXCLUDED.message_id,
+        updated_at = NOW()
+    `,
+    [userId, puzzleId, guildId || null, channelId, messageId]
+  );
+}
+
+async function syncPlayerProgressCard({ player, puzzle, progress }) {
+  try {
+    if (!progressPool || !player?.userId || !player?.channelId || !client.isReady()) {
+      return null;
+    }
+
+    const channel = await client.channels.fetch(player.channelId).catch(() => null);
+
+    if (!channel || !channel.isTextBased()) {
+      return null;
+    }
+
+    const normalizedProgress = progress || createEmptyProgressState();
+    const { buffer, summary } = await renderProgressCardBuffer({
+      player,
+      puzzle,
+      progress: normalizedProgress,
+    });
+    const attachment = new AttachmentBuilder(buffer, {
+      name: `contexto-progress-${puzzle.id}-${player.userId}.png`,
+    });
+    const payload = {
+      content: buildProgressMessageContent({ player, summary }),
+      files: [attachment],
+      components: createPlayMessageComponents(),
+      allowedMentions: { parse: [] },
+    };
+
+    const existingMessageId = await loadProgressMessageRecord({
+      userId: player.userId,
+      puzzleId: puzzle.id,
+      channelId: player.channelId,
+    });
+
+    if (existingMessageId) {
+      const existingMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
+
+      if (existingMessage) {
+        await existingMessage.edit({
+          ...payload,
+          attachments: [],
+        });
+        return existingMessage.id;
+      }
+    }
+
+    const sentMessage = await channel.send(payload);
+    await saveProgressMessageRecord({
+      userId: player.userId,
+      puzzleId: puzzle.id,
+      guildId: player.guildId,
+      channelId: player.channelId,
+      messageId: sentMessage.id,
+    });
+    return sentMessage.id;
+  } catch (error) {
+    console.error("Failed to sync player progress card:", error);
+    return null;
+  }
 }
 
 async function exchangeDiscordCodeForAccessToken(code) {
@@ -1348,42 +1619,6 @@ async function getHintGuess({ guessedWords = [], bestRank }) {
   throw new Error("No hint available.");
 }
 
-async function sendResultMessage({
-  channelId,
-  requestedBy = "A player",
-  guessCount,
-  answer,
-  bestRank,
-}) {
-  const targetChannelId = channelId || DEFAULT_CHANNEL_ID;
-
-  if (!targetChannelId) {
-    throw new Error(
-      "No channel ID provided. Set DEFAULT_CHANNEL_ID or pass channelId in the request."
-    );
-  }
-
-  const channel = await client.channels.fetch(targetChannelId);
-
-  if (!channel || !channel.isTextBased()) {
-    throw new Error("Target channel is missing or is not a text channel.");
-  }
-
-  const content = [
-    "Contexto Result",
-    `${requestedBy} solved today's puzzle in ${guessCount} guesses.`,
-    `Answer: ${answer}`,
-    `Best rank reached: ${bestRank}`,
-  ].join("\n");
-
-  await channel.send({ content });
-
-  return {
-    channelId: targetChannelId,
-    content,
-  };
-}
-
 function createPlayMessageComponents() {
   return [
     new ActionRowBuilder().addComponents(
@@ -1471,24 +1706,6 @@ app.post("/api/client-log", (req, res) => {
   }
 
   res.json({ ok: true });
-});
-
-app.post("/api/discord/token", async (req, res) => {
-  try {
-    console.log("Received Discord auth code exchange request.");
-    const accessToken = await exchangeDiscordCodeForAccessToken(req.body?.code);
-
-    res.json({
-      ok: true,
-      access_token: accessToken,
-    });
-  } catch (error) {
-    console.error("Failed to exchange Discord auth code:", error);
-    res.status(400).json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Token exchange failed.",
-    });
-  }
 });
 
 app.post("/api/discord/login", async (req, res) => {
@@ -1582,6 +1799,14 @@ app.post("/api/progress", async (req, res) => {
     });
     const progress = await loadPlayerProgress(player, puzzle.id);
 
+    if (player) {
+      await syncPlayerProgressCard({
+        player,
+        puzzle,
+        progress: progress || createEmptyProgressState(),
+      });
+    }
+
     res.json({
       ok: true,
       progress,
@@ -1631,6 +1856,10 @@ app.post("/api/hint", async (req, res) => {
       bestRank: progress?.bestRank ?? Number(req.body?.bestRank),
     });
     const countsTowardScore = !alreadyFinished;
+    const nextProgress = {
+      ...(progress || createEmptyProgressState()),
+      guesses: progress?.guesses || [],
+    };
 
     if (player) {
       const guesses = [
@@ -1644,6 +1873,15 @@ app.post("/api/hint", async (req, res) => {
         },
         ...(progress?.guesses || []),
       ];
+      nextProgress.guesses = guesses;
+      nextProgress.solvedAnswer = progress?.solvedAnswer ?? null;
+      nextProgress.gaveUp = Boolean(progress?.gaveUp);
+      nextProgress.resultPosted = Boolean(progress?.resultPosted);
+      nextProgress.guessCount = countScoredGuesses(guesses);
+      nextProgress.hintCount = guesses.filter(
+        (entry) => entry.hinted && entry.countsTowardScore !== false
+      ).length;
+      nextProgress.bestRank = getBestRankFromGuesses(guesses);
 
       await savePlayerProgress({
         player,
@@ -1652,6 +1890,12 @@ app.post("/api/hint", async (req, res) => {
         solvedAnswer: progress?.solvedAnswer ?? null,
         gaveUp: Boolean(progress?.gaveUp),
         resultPosted: Boolean(progress?.resultPosted),
+      });
+
+      await syncPlayerProgressCard({
+        player,
+        puzzle,
+        progress: nextProgress,
       });
     }
 
@@ -1693,6 +1937,10 @@ app.post("/api/guess", async (req, res) => {
     const result = await scoreGuess(req.body?.guess);
     const countsTowardScore = !alreadyFinished;
     const freshSolve = result.solved && !alreadyFinished;
+    const nextProgress = {
+      ...(progress || createEmptyProgressState()),
+      guesses: progress?.guesses || [],
+    };
 
     if (player) {
       const guesses = [
@@ -1706,16 +1954,32 @@ app.post("/api/guess", async (req, res) => {
         },
         ...(progress?.guesses || []),
       ];
+      const nextSolvedAnswer = freshSolve
+        ? result.answer
+        : progress?.solvedAnswer ?? (result.solved ? result.answer : null);
+      nextProgress.guesses = guesses;
+      nextProgress.solvedAnswer = nextSolvedAnswer;
+      nextProgress.gaveUp = Boolean(progress?.gaveUp);
+      nextProgress.resultPosted = Boolean(progress?.resultPosted);
+      nextProgress.guessCount = countScoredGuesses(guesses);
+      nextProgress.hintCount = guesses.filter(
+        (entry) => entry.hinted && entry.countsTowardScore !== false
+      ).length;
+      nextProgress.bestRank = getBestRankFromGuesses(guesses);
 
       await savePlayerProgress({
         player,
         puzzleId: puzzle.id,
         guesses,
-        solvedAnswer: freshSolve
-          ? result.answer
-          : progress?.solvedAnswer ?? (result.solved ? result.answer : null),
+        solvedAnswer: nextSolvedAnswer,
         gaveUp: Boolean(progress?.gaveUp),
         resultPosted: Boolean(progress?.resultPosted),
+      });
+
+      await syncPlayerProgressCard({
+        player,
+        puzzle,
+        progress: nextProgress,
       });
     }
 
@@ -1761,6 +2025,18 @@ app.post("/api/give-up", async (_req, res) => {
             },
             ...(progress?.guesses || []),
           ];
+      const nextProgress = {
+        ...(progress || createEmptyProgressState()),
+        guesses,
+        solvedAnswer: puzzle.answer,
+        gaveUp: true,
+        resultPosted: Boolean(progress?.resultPosted),
+        guessCount: countScoredGuesses(guesses),
+        hintCount: guesses.filter(
+          (entry) => entry.hinted && entry.countsTowardScore !== false
+        ).length,
+        bestRank: getBestRankFromGuesses(guesses),
+      };
 
       await savePlayerProgress({
         player,
@@ -1770,6 +2046,12 @@ app.post("/api/give-up", async (_req, res) => {
         gaveUp: true,
         resultPosted: Boolean(progress?.resultPosted),
       });
+
+      await syncPlayerProgressCard({
+        player,
+        puzzle,
+        progress: nextProgress,
+      });
     }
 
     res.json({
@@ -1778,75 +2060,6 @@ app.post("/api/give-up", async (_req, res) => {
     });
   } catch (error) {
     console.error("Failed to reveal answer:", error);
-    res.status(400).json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
-
-app.post("/api/send-test-message", async (req, res) => {
-  try {
-    const { channelId, requestedBy } = req.body ?? {};
-    const result = await sendTestMessage({ channelId, requestedBy });
-
-    res.json({
-      ok: true,
-      ...result,
-    });
-  } catch (error) {
-    console.error("Failed to send test message:", error);
-    res.status(400).json({
-      ok: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    });
-  }
-});
-
-app.post("/api/post-result", async (req, res) => {
-  try {
-    const { channelId, requestedBy, guessCount, bestRank, answer } = req.body ?? {};
-    const normalizedPlayer = await resolvePlayerContext(req.body);
-    console.log("Post-result request received.", {
-      hasPlayer: Boolean(normalizedPlayer),
-      userId: normalizedPlayer?.userId || null,
-      channelId: channelId || null,
-      guessCount,
-      answer,
-    });
-
-    if (!guessCount || !answer) {
-      throw new Error("Missing guessCount or answer.");
-    }
-
-    const result = await sendResultMessage({
-      channelId,
-      requestedBy,
-      guessCount,
-      answer,
-      bestRank: bestRank || 1,
-    });
-
-    const puzzle = await loadPuzzle();
-    const progress = await loadPlayerProgress(normalizedPlayer, puzzle.id);
-
-    if (normalizedPlayer && progress) {
-      await savePlayerProgress({
-        player: normalizedPlayer,
-        puzzleId: puzzle.id,
-        guesses: progress.guesses,
-        solvedAnswer: progress.solvedAnswer ?? answer,
-        gaveUp: progress.gaveUp,
-        resultPosted: true,
-      });
-    }
-
-    res.json({
-      ok: true,
-      ...result,
-    });
-  } catch (error) {
-    console.error("Failed to post result:", error);
     res.status(400).json({
       ok: false,
       error: error instanceof Error ? error.message : "Unknown error",
@@ -1899,25 +2112,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 
   try {
-    if (interaction.commandName === "contexto-test") {
-      const selectedChannel = interaction.options.getChannel("channel");
-      const result = await sendTestMessage({
-        channelId: selectedChannel?.id,
-        requestedBy: interaction.user.username,
-      });
-
-      await interaction.reply({
-        content: `Sent a test message to <#${result.channelId}>.`,
-        flags: MessageFlags.Ephemeral,
-      });
-      return;
-    }
-
-    if (interaction.commandName === "contexto-play") {
-      await interaction.launchActivity();
-      return;
-    }
-
     if (interaction.commandName === "contexto-post") {
       const selectedChannel = interaction.options.getChannel("channel");
       const targetChannelId = await sendPlayPrompt({
