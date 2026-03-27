@@ -689,7 +689,6 @@ async function authorizeWithDiscord(config, promptMode) {
     response_type: "code",
     state: "contexto-activity-auth",
     scope: ["identify", "applications.commands"],
-    redirect_uri: config.redirectUri,
   };
 
   if (promptMode) {
