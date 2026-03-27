@@ -27,6 +27,7 @@ const {
   DISCORD_BOT_TOKEN,
   DISCORD_CLIENT_ID,
   DISCORD_CLIENT_SECRET,
+  DISCORD_REDIRECT_URI,
   DISCORD_GUILD_ID,
   DEFAULT_CHANNEL_ID,
   DATABASE_URL,
@@ -428,6 +429,12 @@ async function exchangeDiscordCodeForAccessToken(code) {
     );
   }
 
+  if (!DISCORD_REDIRECT_URI) {
+    throw new Error(
+      "DISCORD_REDIRECT_URI is required to authenticate Discord Activity users."
+    );
+  }
+
   const response = await fetch(DISCORD_OAUTH_TOKEN_URL, {
     method: "POST",
     headers: {
@@ -438,6 +445,7 @@ async function exchangeDiscordCodeForAccessToken(code) {
       client_secret: DISCORD_CLIENT_SECRET,
       grant_type: "authorization_code",
       code: String(code || ""),
+      redirect_uri: DISCORD_REDIRECT_URI,
     }),
   });
 
@@ -1265,6 +1273,7 @@ app.get("/api/config", (_req, res) => {
   res.json({
     ok: true,
     clientId: DISCORD_CLIENT_ID,
+    redirectUri: DISCORD_REDIRECT_URI || null,
     progressEnabled: isProgressPersistenceEnabled(),
     discordAuthEnabled: Boolean(DISCORD_CLIENT_SECRET),
   });

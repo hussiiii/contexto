@@ -632,14 +632,30 @@ async function initializeDiscordSdk(config) {
     return;
   }
 
+  if (!config.redirectUri) {
+    throw new Error("DISCORD_REDIRECT_URI is not configured on the server.");
+  }
+
   setStatus("Authorizing with Discord...");
-  const { code } = await discordSdk.commands.authorize({
-    client_id: config.clientId,
-    response_type: "code",
-    state: "",
-    prompt: "none",
-    scope: ["identify"],
-  });
+  let code;
+
+  try {
+    const authorizeResult = await discordSdk.commands.authorize({
+      client_id: config.clientId,
+      response_type: "code",
+      state: "contexto-activity-auth",
+      prompt: "none",
+      scope: ["identify", "applications.commands"],
+      redirect_uri: config.redirectUri,
+    });
+    code = authorizeResult.code;
+  } catch (error) {
+    await reportClientLog("error", "Discord authorize failed.", {
+      message: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+
   await reportClientLog("info", "Discord authorize succeeded.");
 
   setStatus("Authenticating Discord user...");
