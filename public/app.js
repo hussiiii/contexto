@@ -671,6 +671,34 @@ async function loginWithDiscordCode(code) {
   return data;
 }
 
+function describeSdkError(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch (_stringifyError) {
+    return String(error);
+  }
+}
+
+async function authorizeWithDiscord(config, promptMode) {
+  const authorizePayload = {
+    client_id: config.clientId,
+    response_type: "code",
+    state: "contexto-activity-auth",
+    scope: ["identify", "applications.commands"],
+    redirect_uri: config.redirectUri,
+  };
+
+  if (promptMode) {
+    authorizePayload.prompt = promptMode;
+  }
+
+  return discordSdk.commands.authorize(authorizePayload);
+}
+
 async function initializeDiscordSdk(config) {
   if (!isEmbedded) {
     currentPlayer = getOrCreateLocalPlayer();
@@ -747,23 +775,26 @@ async function initializeDiscordSdk(config) {
   let code;
 
   try {
-    const authorizeResult = await discordSdk.commands.authorize({
-      client_id: config.clientId,
-      response_type: "code",
-      state: "contexto-activity-auth",
-      prompt: "none",
-      scope: ["identify", "applications.commands"],
-      redirect_uri: config.redirectUri,
-    });
+    const authorizeResult = await authorizeWithDiscord(config, "none");
     code = authorizeResult.code;
-  } catch (error) {
-    await reportClientLog("error", "Discord authorize failed.", {
-      message: error instanceof Error ? error.message : String(error),
+    await reportClientLog("info", "Discord authorize succeeded silently.");
+  } catch (silentError) {
+    await reportClientLog("warn", "Silent Discord authorize failed; retrying interactively.", {
+      message: describeSdkError(silentError),
     });
-    throw error;
-  }
 
-  await reportClientLog("info", "Discord authorize succeeded.");
+    try {
+      const authorizeResult = await authorizeWithDiscord(config);
+      code = authorizeResult.code;
+      await reportClientLog("info", "Discord authorize succeeded interactively.");
+    } catch (interactiveError) {
+      await reportClientLog("error", "Discord authorize failed.", {
+        silentMessage: describeSdkError(silentError),
+        interactiveMessage: describeSdkError(interactiveError),
+      });
+      throw interactiveError;
+    }
+  }
 
   setStatus("Signing you in...");
   const login = await loginWithDiscordCode(code);
