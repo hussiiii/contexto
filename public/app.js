@@ -70,6 +70,7 @@ let gaveUp = false;
 let confettiTimeoutId = null;
 let currentPlayer = null;
 let discordSdk = null;
+let appLoading = true;
 let appReady = false;
 
 function formatToday() {
@@ -87,6 +88,7 @@ function showScreen(screenName) {
   homeScreen.classList.toggle("screen-active", onHome);
   gameScreen.classList.toggle("screen-active", !onHome);
   closeMenu();
+  syncStartupOverlay();
 
   if (!onHome) {
     window.setTimeout(() => {
@@ -112,11 +114,19 @@ function setStartupMessage(message) {
   startupCopy.textContent = message;
 }
 
+function syncStartupOverlay() {
+  const showOverlay = appLoading && currentScreen !== "home";
+  document.body.classList.toggle("app-loading", showOverlay);
+  startupOverlay.hidden = !showOverlay;
+}
+
+function setAppLoadingState(loading) {
+  appLoading = loading;
+  syncStartupOverlay();
+}
+
 function setAppReadyState(ready) {
   appReady = ready;
-  document.body.classList.toggle("app-loading", !ready);
-  startupOverlay.hidden = ready;
-  playTodayButton.disabled = !ready;
   guessInput.disabled = !ready || gameFinished;
   guessSubmitButton.disabled = !ready;
 }
@@ -939,6 +949,7 @@ async function submitGuess(event) {
 }
 
 async function bootstrap() {
+  setAppLoadingState(true);
   setAppReadyState(false);
   setStartupMessage("Loading Contexto...");
   resetGameState();
@@ -960,6 +971,7 @@ async function bootstrap() {
     }
 
     setAppReadyState(true);
+    setAppLoadingState(false);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to initialize app.";
@@ -974,15 +986,13 @@ async function bootstrap() {
       "error"
     );
     setStartupMessage(message);
+    setAppReadyState(Boolean(puzzle));
+    setAppLoadingState(false);
   }
 }
 
 bootstrap();
 playTodayButton.addEventListener("click", () => {
-  if (!appReady) {
-    return;
-  }
-
   showScreen("game");
 });
 backButton.addEventListener("click", () => showScreen("home"));
