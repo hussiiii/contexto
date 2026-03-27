@@ -31,6 +31,8 @@ const giveUpModal = document.getElementById("give-up-modal");
 const closeGiveUpButton = document.getElementById("close-give-up-button");
 const cancelGiveUpButton = document.getElementById("cancel-give-up-button");
 const confirmGiveUpButton = document.getElementById("confirm-give-up-button");
+const startupOverlay = document.getElementById("startup-overlay");
+const startupCopy = document.getElementById("startup-copy");
 
 const isEmbedded = window.self !== window.top;
 const LOCAL_PLAYER_STORAGE_KEY = "contexto-local-player-v1";
@@ -68,6 +70,7 @@ let gaveUp = false;
 let confettiTimeoutId = null;
 let currentPlayer = null;
 let discordSdk = null;
+let appReady = false;
 
 function formatToday() {
   return new Intl.DateTimeFormat("en-US", {
@@ -87,7 +90,9 @@ function showScreen(screenName) {
 
   if (!onHome) {
     window.setTimeout(() => {
-      guessInput.focus();
+      if (appReady) {
+        guessInput.focus();
+      }
     }, 50);
   }
 }
@@ -101,6 +106,19 @@ function setDates() {
 function setStatus(message, type = "neutral") {
   statusText.textContent = message;
   statusText.dataset.state = type;
+}
+
+function setStartupMessage(message) {
+  startupCopy.textContent = message;
+}
+
+function setAppReadyState(ready) {
+  appReady = ready;
+  document.body.classList.toggle("app-loading", !ready);
+  startupOverlay.hidden = ready;
+  playTodayButton.disabled = !ready;
+  guessInput.disabled = !ready || gameFinished;
+  guessSubmitButton.disabled = !ready;
 }
 
 async function reportClientLog(level, message, extra = {}) {
@@ -600,6 +618,7 @@ async function initializeDiscordSdk(config) {
     return;
   }
 
+  setStartupMessage("Connecting to Discord...");
   setStatus("Connecting to Discord...");
   const { DiscordSDK } = await import("/vendor/embedded-app-sdk/index.mjs");
   discordSdk = new DiscordSDK(config.clientId);
@@ -636,6 +655,7 @@ async function initializeDiscordSdk(config) {
     throw new Error("DISCORD_REDIRECT_URI is not configured on the server.");
   }
 
+  setStartupMessage("Authorizing with Discord...");
   setStatus("Authorizing with Discord...");
   let code;
 
@@ -658,6 +678,7 @@ async function initializeDiscordSdk(config) {
 
   await reportClientLog("info", "Discord authorize succeeded.");
 
+  setStartupMessage("Authenticating your Discord account...");
   setStatus("Authenticating Discord user...");
   const accessToken = await exchangeDiscordToken(code);
   await reportClientLog("info", "Discord token exchange succeeded.");
@@ -685,6 +706,7 @@ async function loadSavedProgress() {
     return;
   }
 
+  setStartupMessage("Restoring your saved progress...");
   setStatus("Loading your saved progress...");
   const response = await fetch("/api/progress", {
     method: "POST",
@@ -851,6 +873,10 @@ async function confirmGiveUp() {
 async function submitGuess(event) {
   event.preventDefault();
 
+  if (!appReady) {
+    return;
+  }
+
   if (!puzzle) {
     setStatus("Puzzle is still loading.", "error");
     return;
@@ -913,6 +939,8 @@ async function submitGuess(event) {
 }
 
 async function bootstrap() {
+  setAppReadyState(false);
+  setStartupMessage("Loading Contexto...");
   resetGameState();
   setDates();
   renderGuesses();
@@ -923,15 +951,15 @@ async function bootstrap() {
     await initializeDiscordSdk(config);
     await loadSavedProgress();
 
-    if (solvedAnswer) {
-      setStatus("Restored your saved progress.", "success");
-    } else if (guesses.length > 0) {
-      setStatus("Restored your saved progress.", "success");
+    if (solvedAnswer || guesses.length > 0) {
+      setStatus("");
     } else if (launchChannelId) {
       setStatus(`Ready to post back into ${launchChannelId}.`);
     } else {
       setStatus("Ready.");
     }
+
+    setAppReadyState(true);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to initialize app.";
@@ -945,11 +973,18 @@ async function bootstrap() {
       `${message} Progress will not be saved until Discord sign-in works.`,
       "error"
     );
+    setStartupMessage(message);
   }
 }
 
 bootstrap();
-playTodayButton.addEventListener("click", () => showScreen("game"));
+playTodayButton.addEventListener("click", () => {
+  if (!appReady) {
+    return;
+  }
+
+  showScreen("game");
+});
 backButton.addEventListener("click", () => showScreen("home"));
 menuButton.addEventListener("click", (event) => {
   event.stopPropagation();
