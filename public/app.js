@@ -103,6 +103,25 @@ function setStatus(message, type = "neutral") {
   statusText.dataset.state = type;
 }
 
+async function reportClientLog(level, message, extra = {}) {
+  try {
+    await fetch("/api/client-log", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        level,
+        message,
+        extra,
+      }),
+      keepalive: true,
+    });
+  } catch (_error) {
+    // Ignore best-effort client log failures.
+  }
+}
+
 function syncModalState() {
   const hasOpenModal = !topWordsModal.hidden || !giveUpModal.hidden;
   document.body.classList.toggle("modal-open", hasOpenModal);
@@ -581,6 +600,7 @@ async function initializeDiscordSdk(config) {
     return;
   }
 
+  setStatus("Connecting to Discord...");
   const { DiscordSDK } = await import("/vendor/embedded-app-sdk/index.mjs");
   discordSdk = new DiscordSDK(config.clientId);
 
@@ -596,14 +616,23 @@ async function initializeDiscordSdk(config) {
   requestedBy = "contexto-activity-ui";
   launchChannelId = discordSdk.channelId;
   activityLabel = "A Discord player";
+  await reportClientLog("info", "Discord SDK ready.", {
+    channelId: launchChannelId,
+    guildId: discordSdk.guildId,
+  });
 
   if (!config.discordAuthEnabled) {
+    await reportClientLog(
+      "error",
+      "Discord auth disabled because client secret is missing."
+    );
     console.warn(
       "Discord Activity auth is disabled because DISCORD_CLIENT_SECRET is not configured."
     );
     return;
   }
 
+  setStatus("Authorizing with Discord...");
   const { code } = await discordSdk.commands.authorize({
     client_id: config.clientId,
     response_type: "code",
@@ -611,7 +640,11 @@ async function initializeDiscordSdk(config) {
     prompt: "none",
     scope: ["identify"],
   });
+  await reportClientLog("info", "Discord authorize succeeded.");
+
+  setStatus("Authenticating Discord user...");
   const accessToken = await exchangeDiscordToken(code);
+  await reportClientLog("info", "Discord token exchange succeeded.");
   const auth = await discordSdk.commands.authenticate({
     access_token: accessToken,
   });
@@ -624,13 +657,19 @@ async function initializeDiscordSdk(config) {
     channelId: discordSdk.channelId,
   };
   activityLabel = currentPlayer.displayName;
+  await reportClientLog("info", "Discord authenticate succeeded.", {
+    userId: currentPlayer.userId,
+    displayName: currentPlayer.displayName,
+  });
 }
 
 async function loadSavedProgress() {
   if (!currentPlayer) {
+    await reportClientLog("warn", "Skipping saved progress load because no player identity is available.");
     return;
   }
 
+  setStatus("Loading your saved progress...");
   const response = await fetch("/api/progress", {
     method: "POST",
     headers: {
@@ -878,8 +917,16 @@ async function bootstrap() {
       setStatus("Ready.");
     }
   } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to initialize app.";
+    await reportClientLog("error", "App bootstrap failed.", {
+      message,
+      isEmbedded,
+      hasCurrentPlayer: Boolean(currentPlayer),
+      channelId: launchChannelId,
+    });
     setStatus(
-      error instanceof Error ? error.message : "Failed to initialize app.",
+      `${message} Progress will not be saved until Discord sign-in works.`,
       "error"
     );
   }

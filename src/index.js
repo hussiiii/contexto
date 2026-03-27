@@ -305,6 +305,9 @@ function getBestRankFromGuesses(guesses) {
 
 async function loadPlayerProgress(player, puzzleId) {
   if (!progressPool || !player) {
+    if (!player) {
+      console.warn("Skipping progress load: missing player identity.");
+    }
     return null;
   }
 
@@ -325,6 +328,7 @@ async function loadPlayerProgress(player, puzzleId) {
   );
 
   if (result.rows.length === 0) {
+    console.log(`No saved progress found for user ${player.userId} on puzzle ${puzzleId}.`);
     return null;
   }
 
@@ -351,6 +355,9 @@ async function savePlayerProgress({
   resultPosted = false,
 }) {
   if (!progressPool || !player) {
+    if (!player) {
+      console.warn("Skipping progress save: missing player identity.");
+    }
     return;
   }
 
@@ -407,6 +414,11 @@ async function savePlayerProgress({
       finished ? new Date().toISOString() : null,
     ]
   );
+  console.log(
+    `Saved progress for user ${player.userId} on puzzle ${puzzleId}: ${normalizedGuesses.length} guesses, solved=${Boolean(
+      normalizedSolvedAnswer
+    )}, gaveUp=${gaveUp}, resultPosted=${resultPosted}.`
+  );
 }
 
 async function exchangeDiscordCodeForAccessToken(code) {
@@ -436,6 +448,8 @@ async function exchangeDiscordCodeForAccessToken(code) {
   if (!response.ok || !payload?.access_token) {
     throw new Error(payload?.error_description || payload?.error || "Token exchange failed.");
   }
+
+  console.log("Discord token exchange succeeded.");
 
   return payload.access_token;
 }
@@ -1256,8 +1270,26 @@ app.get("/api/config", (_req, res) => {
   });
 });
 
+app.post("/api/client-log", (req, res) => {
+  const level = String(req.body?.level || "info").toLowerCase();
+  const message = String(req.body?.message || "Client log");
+  const extra = req.body?.extra;
+  const payload = extra ? { extra } : undefined;
+
+  if (level === "error") {
+    console.error(`[client] ${message}`, payload);
+  } else if (level === "warn") {
+    console.warn(`[client] ${message}`, payload);
+  } else {
+    console.log(`[client] ${message}`, payload);
+  }
+
+  res.json({ ok: true });
+});
+
 app.post("/api/discord/token", async (req, res) => {
   try {
+    console.log("Received Discord auth code exchange request.");
     const accessToken = await exchangeDiscordCodeForAccessToken(req.body?.code);
 
     res.json({
@@ -1299,6 +1331,11 @@ app.post("/api/progress", async (req, res) => {
   try {
     const player = normalizePlayerContext(req.body?.player);
     const puzzle = await loadPuzzle();
+    console.log("Loading player progress.", {
+      hasPlayer: Boolean(player),
+      userId: player?.userId || null,
+      puzzleId: puzzle.id,
+    });
     const progress = await loadPlayerProgress(player, puzzle.id);
 
     res.json({
@@ -1336,6 +1373,11 @@ app.post("/api/hint", async (req, res) => {
   try {
     const player = normalizePlayerContext(req.body?.player);
     const puzzle = await loadPuzzle();
+    console.log("Hint request received.", {
+      hasPlayer: Boolean(player),
+      userId: player?.userId || null,
+      puzzleId: puzzle.id,
+    });
     const progress = await loadPlayerProgress(player, puzzle.id);
     const alreadyFinished = Boolean(progress?.solvedAnswer);
     const result = await getHintGuess({
@@ -1387,6 +1429,12 @@ app.post("/api/guess", async (req, res) => {
   try {
     const player = normalizePlayerContext(req.body?.player);
     const puzzle = await loadPuzzle();
+    console.log("Guess request received.", {
+      hasPlayer: Boolean(player),
+      userId: player?.userId || null,
+      puzzleId: puzzle.id,
+      guess: normalizeGuess(req.body?.guess),
+    });
     const progress = await loadPlayerProgress(player, puzzle.id);
     const normalizedGuess = normalizeGuess(req.body?.guess);
 
@@ -1446,6 +1494,11 @@ app.post("/api/give-up", async (_req, res) => {
   try {
     const player = normalizePlayerContext(_req.body?.player);
     const { puzzle } = await getSemanticPuzzle();
+    console.log("Give-up request received.", {
+      hasPlayer: Boolean(player),
+      userId: player?.userId || null,
+      puzzleId: puzzle.id,
+    });
     const progress = await loadPlayerProgress(player, puzzle.id);
 
     if (player) {
@@ -1509,6 +1562,14 @@ app.post("/api/send-test-message", async (req, res) => {
 app.post("/api/post-result", async (req, res) => {
   try {
     const { channelId, requestedBy, guessCount, bestRank, answer, player } = req.body ?? {};
+    const normalizedPlayer = normalizePlayerContext(player);
+    console.log("Post-result request received.", {
+      hasPlayer: Boolean(normalizedPlayer),
+      userId: normalizedPlayer?.userId || null,
+      channelId: channelId || null,
+      guessCount,
+      answer,
+    });
 
     if (!guessCount || !answer) {
       throw new Error("Missing guessCount or answer.");
@@ -1522,7 +1583,6 @@ app.post("/api/post-result", async (req, res) => {
       bestRank: bestRank || 1,
     });
 
-    const normalizedPlayer = normalizePlayerContext(player);
     const puzzle = await loadPuzzle();
     const progress = await loadPlayerProgress(normalizedPlayer, puzzle.id);
 
