@@ -10,10 +10,6 @@ body {
   color: #f9fafb;
 }
 
-body.app-loading {
-  overflow: hidden;
-}
-
 body.modal-open {
   overflow: hidden;
 }
@@ -35,59 +31,6 @@ body.modal-open {
 
 .screen-active {
   display: block;
-}
-
-.startup-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 40;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background:
-    radial-gradient(circle at top, rgba(92, 116, 145, 0.22), transparent 40%),
-    rgba(10, 16, 24, 0.92);
-  backdrop-filter: blur(6px);
-}
-
-.startup-card {
-  width: min(100%, 360px);
-  padding: 26px 24px 22px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 22px;
-  background: rgba(27, 38, 50, 0.95);
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.32);
-  text-align: center;
-}
-
-.startup-spinner {
-  width: 42px;
-  height: 42px;
-  margin: 0 auto 18px;
-  border: 3px solid rgba(255, 255, 255, 0.16);
-  border-top-color: #f8fafc;
-  border-radius: 999px;
-  animation: startup-spin 0.9s linear infinite;
-}
-
-.startup-title {
-  margin: 0 0 8px;
-  font-size: 1.3rem;
-  font-weight: 800;
-}
-
-.startup-copy {
-  margin: 0;
-  color: #c7d0da;
-  font-size: 0.96rem;
-  line-height: 1.45;
-}
-
-@keyframes startup-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .confetti-layer {

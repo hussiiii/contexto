@@ -31,8 +31,6 @@ const giveUpModal = document.getElementById("give-up-modal");
 const closeGiveUpButton = document.getElementById("close-give-up-button");
 const cancelGiveUpButton = document.getElementById("cancel-give-up-button");
 const confirmGiveUpButton = document.getElementById("confirm-give-up-button");
-const startupOverlay = document.getElementById("startup-overlay");
-const startupCopy = document.getElementById("startup-copy");
 
 const isEmbedded = window.self !== window.top;
 const LOCAL_PLAYER_STORAGE_KEY = "contexto-local-player-v1";
@@ -70,8 +68,6 @@ let gaveUp = false;
 let confettiTimeoutId = null;
 let currentPlayer = null;
 let discordSdk = null;
-let appLoading = true;
-let appReady = false;
 
 function formatToday() {
   return new Intl.DateTimeFormat("en-US", {
@@ -88,13 +84,10 @@ function showScreen(screenName) {
   homeScreen.classList.toggle("screen-active", onHome);
   gameScreen.classList.toggle("screen-active", !onHome);
   closeMenu();
-  syncStartupOverlay();
 
   if (!onHome) {
     window.setTimeout(() => {
-      if (appReady) {
-        guessInput.focus();
-      }
+      guessInput.focus();
     }, 50);
   }
 }
@@ -108,58 +101,6 @@ function setDates() {
 function setStatus(message, type = "neutral") {
   statusText.textContent = message;
   statusText.dataset.state = type;
-}
-
-function setStartupMessage(message) {
-  startupCopy.textContent = message;
-}
-
-function formatClientError(error, fallback = "Unknown error") {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  if (typeof error === "string" && error.trim()) {
-    return error;
-  }
-
-  if (error && typeof error === "object") {
-    const objectMessage =
-      error.message ||
-      error.error_description ||
-      error.error ||
-      error.code ||
-      null;
-
-    if (typeof objectMessage === "string" && objectMessage.trim()) {
-      return objectMessage;
-    }
-
-    try {
-      return JSON.stringify(error);
-    } catch (_jsonError) {
-      return fallback;
-    }
-  }
-
-  return fallback;
-}
-
-function syncStartupOverlay() {
-  const showOverlay = appLoading && currentScreen !== "home";
-  document.body.classList.toggle("app-loading", showOverlay);
-  startupOverlay.hidden = !showOverlay;
-}
-
-function setAppLoadingState(loading) {
-  appLoading = loading;
-  syncStartupOverlay();
-}
-
-function setAppReadyState(ready) {
-  appReady = ready;
-  guessInput.disabled = !ready || gameFinished;
-  guessSubmitButton.disabled = !ready;
 }
 
 async function reportClientLog(level, message, extra = {}) {
@@ -659,7 +600,6 @@ async function initializeDiscordSdk(config) {
     return;
   }
 
-  setStartupMessage("Connecting to Discord...");
   setStatus("Connecting to Discord...");
   const { DiscordSDK } = await import("/vendor/embedded-app-sdk/index.mjs");
   discordSdk = new DiscordSDK(config.clientId);
@@ -696,50 +636,28 @@ async function initializeDiscordSdk(config) {
     throw new Error("DISCORD_REDIRECT_URI is not configured on the server.");
   }
 
-  setStartupMessage("Authorizing with Discord...");
   setStatus("Authorizing with Discord...");
   let code;
-  const authorizeBase = {
-    client_id: config.clientId,
-    response_type: "code",
-    state: "contexto-activity-auth",
-    scope: ["identify", "applications.commands"],
-    redirect_uri: config.redirectUri,
-  };
 
   try {
     const authorizeResult = await discordSdk.commands.authorize({
-      ...authorizeBase,
+      client_id: config.clientId,
+      response_type: "code",
+      state: "contexto-activity-auth",
       prompt: "none",
+      scope: ["identify", "applications.commands"],
+      redirect_uri: config.redirectUri,
     });
     code = authorizeResult.code;
-  } catch (initialError) {
-    await reportClientLog("warn", "Discord silent authorize failed. Retrying with consent.", {
-      message: formatClientError(initialError),
+  } catch (error) {
+    await reportClientLog("error", "Discord authorize failed.", {
+      message: error instanceof Error ? error.message : String(error),
     });
-
-    try {
-      const authorizeResult = await discordSdk.commands.authorize({
-        ...authorizeBase,
-        prompt: "consent",
-      });
-      code = authorizeResult.code;
-    } catch (retryError) {
-      await reportClientLog("error", "Discord authorize failed.", {
-        message: formatClientError(retryError),
-      });
-      throw new Error(
-        `Discord authorization failed: ${formatClientError(
-          retryError,
-          "Unable to authorize with Discord."
-        )}`
-      );
-    }
+    throw error;
   }
 
   await reportClientLog("info", "Discord authorize succeeded.");
 
-  setStartupMessage("Authenticating your Discord account...");
   setStatus("Authenticating Discord user...");
   const accessToken = await exchangeDiscordToken(code);
   await reportClientLog("info", "Discord token exchange succeeded.");
@@ -767,7 +685,6 @@ async function loadSavedProgress() {
     return;
   }
 
-  setStartupMessage("Restoring your saved progress...");
   setStatus("Loading your saved progress...");
   const response = await fetch("/api/progress", {
     method: "POST",
@@ -934,10 +851,6 @@ async function confirmGiveUp() {
 async function submitGuess(event) {
   event.preventDefault();
 
-  if (!appReady) {
-    return;
-  }
-
   if (!puzzle) {
     setStatus("Puzzle is still loading.", "error");
     return;
@@ -1000,9 +913,6 @@ async function submitGuess(event) {
 }
 
 async function bootstrap() {
-  setAppLoadingState(true);
-  setAppReadyState(false);
-  setStartupMessage("Loading Contexto...");
   resetGameState();
   setDates();
   renderGuesses();
@@ -1013,18 +923,18 @@ async function bootstrap() {
     await initializeDiscordSdk(config);
     await loadSavedProgress();
 
-    if (solvedAnswer || guesses.length > 0) {
-      setStatus("");
+    if (solvedAnswer) {
+      setStatus("Restored your saved progress.", "success");
+    } else if (guesses.length > 0) {
+      setStatus("Restored your saved progress.", "success");
     } else if (launchChannelId) {
       setStatus(`Ready to post back into ${launchChannelId}.`);
     } else {
       setStatus("Ready.");
     }
-
-    setAppReadyState(true);
-    setAppLoadingState(false);
   } catch (error) {
-    const message = formatClientError(error, "Failed to initialize app.");
+    const message =
+      error instanceof Error ? error.message : "Failed to initialize app.";
     await reportClientLog("error", "App bootstrap failed.", {
       message,
       isEmbedded,
@@ -1035,16 +945,11 @@ async function bootstrap() {
       `${message} Progress will not be saved until Discord sign-in works.`,
       "error"
     );
-    setStartupMessage(message);
-    setAppReadyState(Boolean(puzzle));
-    setAppLoadingState(false);
   }
 }
 
 bootstrap();
-playTodayButton.addEventListener("click", () => {
-  showScreen("game");
-});
+playTodayButton.addEventListener("click", () => showScreen("game"));
 backButton.addEventListener("click", () => showScreen("home"));
 menuButton.addEventListener("click", (event) => {
   event.stopPropagation();
