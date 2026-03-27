@@ -114,6 +114,37 @@ function setStartupMessage(message) {
   startupCopy.textContent = message;
 }
 
+function formatClientError(error, fallback = "Unknown error") {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  if (typeof error === "string" && error.trim()) {
+    return error;
+  }
+
+  if (error && typeof error === "object") {
+    const objectMessage =
+      error.message ||
+      error.error_description ||
+      error.error ||
+      error.code ||
+      null;
+
+    if (typeof objectMessage === "string" && objectMessage.trim()) {
+      return objectMessage;
+    }
+
+    try {
+      return JSON.stringify(error);
+    } catch (_jsonError) {
+      return fallback;
+    }
+  }
+
+  return fallback;
+}
+
 function syncStartupOverlay() {
   const showOverlay = appLoading && currentScreen !== "home";
   document.body.classList.toggle("app-loading", showOverlay);
@@ -668,22 +699,42 @@ async function initializeDiscordSdk(config) {
   setStartupMessage("Authorizing with Discord...");
   setStatus("Authorizing with Discord...");
   let code;
+  const authorizeBase = {
+    client_id: config.clientId,
+    response_type: "code",
+    state: "contexto-activity-auth",
+    scope: ["identify", "applications.commands"],
+    redirect_uri: config.redirectUri,
+  };
 
   try {
     const authorizeResult = await discordSdk.commands.authorize({
-      client_id: config.clientId,
-      response_type: "code",
-      state: "contexto-activity-auth",
+      ...authorizeBase,
       prompt: "none",
-      scope: ["identify", "applications.commands"],
-      redirect_uri: config.redirectUri,
     });
     code = authorizeResult.code;
-  } catch (error) {
-    await reportClientLog("error", "Discord authorize failed.", {
-      message: error instanceof Error ? error.message : String(error),
+  } catch (initialError) {
+    await reportClientLog("warn", "Discord silent authorize failed. Retrying with consent.", {
+      message: formatClientError(initialError),
     });
-    throw error;
+
+    try {
+      const authorizeResult = await discordSdk.commands.authorize({
+        ...authorizeBase,
+        prompt: "consent",
+      });
+      code = authorizeResult.code;
+    } catch (retryError) {
+      await reportClientLog("error", "Discord authorize failed.", {
+        message: formatClientError(retryError),
+      });
+      throw new Error(
+        `Discord authorization failed: ${formatClientError(
+          retryError,
+          "Unable to authorize with Discord."
+        )}`
+      );
+    }
   }
 
   await reportClientLog("info", "Discord authorize succeeded.");
@@ -973,8 +1024,7 @@ async function bootstrap() {
     setAppReadyState(true);
     setAppLoadingState(false);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to initialize app.";
+    const message = formatClientError(error, "Failed to initialize app.");
     await reportClientLog("error", "App bootstrap failed.", {
       message,
       isEmbedded,
