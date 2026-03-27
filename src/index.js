@@ -19,7 +19,6 @@ import {
 } from "discord.js";
 import OpenAI from "openai";
 import { words as popularWords } from "popular-english-words";
-import wordListPath from "word-list";
 
 dotenv.config();
 
@@ -65,7 +64,7 @@ const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
-const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-wordlist-filter-v1";
+const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
@@ -183,10 +182,23 @@ async function loadPuzzle() {
 async function getAcceptedWords() {
   if (!acceptedWordsPromise) {
     acceptedWordsPromise = (async () => {
-      const rawWords = await fs.readFile(wordListPath, "utf8");
+      const startedAt = Date.now();
+      const rawPopularWords = popularWords.getMostPopular(1000000);
       const acceptedWords = new Set();
+      const allowedAnswers = await getAllowedAnswers();
+      let filteredPopularWordCount = 0;
 
-      for (const rawWord of rawWords.split("\n")) {
+      console.log(
+        "Building in-memory valid-guess dictionary from the full popular-english-words list."
+      );
+      console.log(
+        "This startup step is used only for guess validation so common real words are accepted and obvious gibberish is rejected without any API calls."
+      );
+      console.log(
+        `Guess dictionary preload: scanning ${rawPopularWords.length} popular words, filtering by normalization, length, and stop-word rules, then adding ${allowedAnswers.size} ordered answer words from answers.json.`
+      );
+
+      for (const rawWord of rawPopularWords) {
         const normalizedWord = normalizeGuess(rawWord);
 
         if (
@@ -195,11 +207,19 @@ async function getAcceptedWords() {
           normalizedWord.length <= 16 &&
           !STOP_WORDS.has(normalizedWord)
         ) {
+          filteredPopularWordCount += 1;
           acceptedWords.add(normalizedWord);
         }
       }
 
-      console.log(`Loaded ${acceptedWords.size} accepted guess words.`);
+      for (const answer of allowedAnswers) {
+        acceptedWords.add(answer);
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      console.log(
+        `Guess dictionary ready in ${elapsedMs}ms. Kept ${filteredPopularWordCount} filtered popular words and ${allowedAnswers.size} ordered answer words, resulting in ${acceptedWords.size} unique valid guess words cached in memory.`
+      );
       return acceptedWords;
     })();
   }
@@ -455,7 +475,6 @@ function findRankFromSortedScores(sortedScores, score) {
 }
 
 async function buildRankingVocabulary() {
-  const acceptedWords = await getAcceptedWords();
   const filteredWords = popularWords.getMostPopularFilter(RANKING_VOCAB_SIZE, (word) => {
     const normalizedWord = normalizeGuess(word);
 
@@ -463,8 +482,7 @@ async function buildRankingVocabulary() {
       normalizedWord &&
       normalizedWord.length >= 3 &&
       normalizedWord.length <= 16 &&
-      !STOP_WORDS.has(normalizedWord) &&
-      acceptedWords.has(normalizedWord)
+      !STOP_WORDS.has(normalizedWord)
     );
   });
 
@@ -810,6 +828,66 @@ async function scoreGuess(guess) {
   return result;
 }
 
+function getHintStartRank(bestRank) {
+  if (!Number.isFinite(bestRank) || bestRank <= 0) {
+    return 100;
+  }
+
+  return Math.max(2, Math.floor(bestRank / 2));
+}
+
+async function getHintGuess({ guessedWords = [], bestRank }) {
+  const normalizedGuessedWords = new Set(
+    (Array.isArray(guessedWords) ? guessedWords : [])
+      .map((word) => normalizeGuess(word))
+      .filter(Boolean)
+  );
+  const { puzzle, semantic } = await getSemanticPuzzle();
+  const startRank = getHintStartRank(bestRank);
+
+  const findCandidate = (fromIndex, toIndexExclusive) => {
+    for (let index = fromIndex; index < toIndexExclusive; index += 1) {
+      const entry = semantic.rankedWords[index];
+
+      if (!entry) {
+        continue;
+      }
+
+      if (entry.word === puzzle.answer || normalizedGuessedWords.has(entry.word)) {
+        continue;
+      }
+
+      return {
+        guess: entry.word,
+        rank: index + 1,
+        score: entry.score,
+        solved: false,
+        answer: null,
+        hint: true,
+      };
+    }
+
+    return null;
+  };
+
+  const primaryCandidate = findCandidate(
+    Math.max(1, startRank - 1),
+    semantic.rankedWords.length
+  );
+
+  if (primaryCandidate) {
+    return primaryCandidate;
+  }
+
+  const fallbackCandidate = findCandidate(1, Math.max(1, startRank - 1));
+
+  if (fallbackCandidate) {
+    return fallbackCandidate;
+  }
+
+  throw new Error("No hint available.");
+}
+
 async function sendResultMessage({
   channelId,
   requestedBy = "A player",
@@ -955,6 +1033,26 @@ app.get("/api/top-words", async (_req, res) => {
   }
 });
 
+app.post("/api/hint", async (req, res) => {
+  try {
+    const result = await getHintGuess({
+      guessedWords: req.body?.guessedWords,
+      bestRank: Number(req.body?.bestRank),
+    });
+
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("Failed to load hint:", error);
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
 app.post("/api/guess", async (req, res) => {
   try {
     const result = await scoreGuess(req.body?.guess);
@@ -965,6 +1063,23 @@ app.post("/api/guess", async (req, res) => {
     });
   } catch (error) {
     console.error("Failed to score guess:", error);
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Unknown error",
+    });
+  }
+});
+
+app.post("/api/give-up", async (_req, res) => {
+  try {
+    const { puzzle } = await getSemanticPuzzle();
+
+    res.json({
+      ok: true,
+      answer: puzzle.answer,
+    });
+  } catch (error) {
+    console.error("Failed to reveal answer:", error);
     res.status(400).json({
       ok: false,
       error: error instanceof Error ? error.message : "Unknown error",

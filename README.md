@@ -97,9 +97,10 @@ This keeps the game shared and deterministic while still allowing much broader u
 ### Current ranking behavior
 
 - the fixed ranking universe defaults to `50000` words
-- that universe is now built from `popular-english-words`, filtered through `word-list`
+- that universe is now built from the top `RANKING_VOCAB_SIZE` entries in `popular-english-words`
 - common low-information stop words such as `the`, `and`, `but`, etc. are filtered out
 - puzzle answers must come from the ordered answer list in `data/generated/answers.json`
+- guess validation uses the full `popular-english-words` list, plus everything in `answers.json`
 - ranking uses an adjusted score:
   - semantic similarity from embeddings
   - minus lexical penalties for edit-distance, substring, and character-overlap traps

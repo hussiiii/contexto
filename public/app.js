@@ -2,6 +2,10 @@ const homeScreen = document.getElementById("home-screen");
 const gameScreen = document.getElementById("game-screen");
 const playTodayButton = document.getElementById("play-today-button");
 const backButton = document.getElementById("back-button");
+const menuButton = document.getElementById("menu-button");
+const menuDropdown = document.getElementById("menu-dropdown");
+const hintButton = document.getElementById("hint-button");
+const giveUpButton = document.getElementById("give-up-button");
 const guessForm = document.getElementById("guess-form");
 const guessSubmitButton = document.getElementById("guess-submit-button");
 const statusText = document.getElementById("status");
@@ -12,6 +16,7 @@ const latestGuessSection = document.getElementById("latest-guess-section");
 const latestGuess = document.getElementById("latest-guess");
 const guessList = document.getElementById("guess-list");
 const solveBanner = document.getElementById("solve-banner");
+const solveTitle = document.getElementById("solve-title");
 const solveCopy = document.getElementById("solve-copy");
 const showTopWordsButton = document.getElementById("show-top-words-button");
 const heroDateText = document.getElementById("hero-date");
@@ -20,6 +25,10 @@ const topWordsModal = document.getElementById("top-words-modal");
 const closeTopWordsButton = document.getElementById("close-top-words-button");
 const topWordsStatus = document.getElementById("top-words-status");
 const topWordsList = document.getElementById("top-words-list");
+const giveUpModal = document.getElementById("give-up-modal");
+const closeGiveUpButton = document.getElementById("close-give-up-button");
+const cancelGiveUpButton = document.getElementById("cancel-give-up-button");
+const confirmGiveUpButton = document.getElementById("confirm-give-up-button");
 
 const isEmbedded = window.self !== window.top;
 const COMMON_WORDS = new Set([
@@ -51,6 +60,8 @@ let resultPosted = false;
 let activityLabel = "A player";
 let solvedAnswer = null;
 let topWords = null;
+let gameFinished = false;
+let gaveUp = false;
 
 function formatToday() {
   return new Intl.DateTimeFormat("en-US", {
@@ -66,6 +77,7 @@ function showScreen(screenName) {
 
   homeScreen.classList.toggle("screen-active", onHome);
   gameScreen.classList.toggle("screen-active", !onHome);
+  closeMenu();
 
   if (!onHome) {
     window.setTimeout(() => {
@@ -83,6 +95,11 @@ function setDates() {
 function setStatus(message, type = "neutral") {
   statusText.textContent = message;
   statusText.dataset.state = type;
+}
+
+function syncModalState() {
+  const hasOpenModal = !topWordsModal.hidden || !giveUpModal.hidden;
+  document.body.classList.toggle("modal-open", hasOpenModal);
 }
 
 function renderTopWords(entries) {
@@ -107,12 +124,44 @@ function renderTopWords(entries) {
 
 function openTopWordsModal() {
   topWordsModal.hidden = false;
-  document.body.classList.add("modal-open");
+  syncModalState();
 }
 
 function closeTopWordsModal() {
   topWordsModal.hidden = true;
-  document.body.classList.remove("modal-open");
+  syncModalState();
+}
+
+function openGiveUpModal() {
+  giveUpModal.hidden = false;
+  syncModalState();
+}
+
+function closeGiveUpModal() {
+  giveUpModal.hidden = true;
+  syncModalState();
+}
+
+function openMenu() {
+  if (gameFinished) {
+    return;
+  }
+
+  menuDropdown.hidden = false;
+  menuButton.setAttribute("aria-expanded", "true");
+}
+
+function closeMenu() {
+  menuDropdown.hidden = true;
+  menuButton.setAttribute("aria-expanded", "false");
+}
+
+function toggleMenu() {
+  if (menuDropdown.hidden) {
+    openMenu();
+  } else {
+    closeMenu();
+  }
 }
 
 async function loadTopWords() {
@@ -176,15 +225,25 @@ function normalizeClientGuessInput(rawGuess) {
 }
 
 function updateGuessCount() {
-  guessCountText.textContent = String(guesses.length);
+  guessCountText.textContent = String(getScoreGuessCount());
+}
+
+function getScoredGuesses() {
+  return guesses.filter((entry) => entry.countsTowardScore !== false);
+}
+
+function getScoreGuessCount() {
+  return getScoredGuesses().length;
 }
 
 function bestRank() {
-  if (guesses.length === 0) {
+  const scoredGuesses = getScoredGuesses();
+
+  if (scoredGuesses.length === 0) {
     return null;
   }
 
-  return Math.min(...guesses.map((entry) => entry.rank));
+  return Math.min(...scoredGuesses.map((entry) => entry.rank));
 }
 
 function getGuessTone(rank) {
@@ -255,12 +314,70 @@ function renderGuesses() {
   }
 }
 
-function setSolvedState(answer) {
+function setGameFinishedState(answer, { solved }) {
+  gameFinished = true;
+  gaveUp = !solved;
   solveBanner.hidden = false;
-  solveCopy.textContent = `The answer was "${answer}". You solved today's puzzle in ${guesses.length} guesses.`;
+  solveBanner.dataset.state = solved ? "solved" : "gave-up";
+  solveTitle.textContent = solved ? "You solved it!" : "Better luck next time";
+  solveCopy.textContent = solved
+    ? `The answer was "${answer}". You solved today's puzzle in ${getScoreGuessCount()} guesses.`
+    : `The answer was "${answer}". You can still view the top 100 similar words below.`;
   showTopWordsButton.hidden = false;
-  guessInput.disabled = true;
-  guessSubmitButton.disabled = true;
+  hintButton.disabled = true;
+  giveUpButton.disabled = true;
+  menuButton.disabled = true;
+  closeMenu();
+}
+
+function applyGuessResult(data, { hinted = false, countsTowardScore = true } = {}) {
+  guessedWords.add(data.guess);
+  guesses.unshift({
+    attempt: guesses.length + 1,
+    guess: data.guess,
+    rank: data.rank,
+    solved: data.solved,
+    hinted,
+    countsTowardScore,
+  });
+  guessInput.value = "";
+  renderGuesses();
+
+  if (data.solved) {
+    solvedAnswer = data.answer;
+    setGameFinishedState(data.answer, { solved: true });
+    return {
+      status: "You found the secret word.",
+      statusType: "success",
+      solved: true,
+    };
+  }
+
+  return {
+    status: hinted
+      ? `Hint used: "${data.guess}" is rank ${data.rank}.`
+      : `"${data.guess}" is rank ${data.rank}.`,
+    statusType: hinted ? "success" : "neutral",
+    solved: false,
+  };
+}
+
+function revealAnswerAsGuess(answer) {
+  if (!answer || guessedWords.has(answer)) {
+    return;
+  }
+
+  guessedWords.add(answer);
+  guesses.unshift({
+    attempt: guesses.length + 1,
+    guess: answer,
+    rank: 1,
+    solved: true,
+    hinted: false,
+    revealed: true,
+    countsTowardScore: false,
+  });
+  renderGuesses();
 }
 
 async function loadPuzzle() {
@@ -346,6 +463,84 @@ async function postResult() {
   }
 }
 
+async function useHint() {
+  if (!puzzle || gameFinished) {
+    return;
+  }
+
+  closeMenu();
+  setStatus("Finding a hint...");
+  hintButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/hint", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        guessedWords: [...guessedWords],
+        bestRank: bestRank(),
+      }),
+    });
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Failed to load hint.");
+    }
+
+    if (guessedWords.has(data.guess)) {
+      throw new Error("No hint available.");
+    }
+
+    const result = applyGuessResult(data, { hinted: true });
+    setStatus(result.status, result.statusType);
+  } catch (error) {
+    setStatus(
+      error instanceof Error ? error.message : "Failed to load hint.",
+      "error"
+    );
+  } finally {
+    hintButton.disabled = gameFinished;
+  }
+}
+
+async function confirmGiveUp() {
+  if (!puzzle || gameFinished) {
+    return;
+  }
+
+  confirmGiveUpButton.disabled = true;
+  cancelGiveUpButton.disabled = true;
+  closeGiveUpButton.disabled = true;
+
+  try {
+    const response = await fetch("/api/give-up", {
+      method: "POST",
+    });
+    const data = await response.json();
+
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || "Failed to reveal answer.");
+    }
+
+    solvedAnswer = data.answer;
+    revealAnswerAsGuess(data.answer);
+    closeGiveUpModal();
+    setGameFinishedState(data.answer, { solved: false });
+    setStatus(`The answer was "${data.answer}".`, "error");
+  } catch (error) {
+    setStatus(
+      error instanceof Error ? error.message : "Failed to reveal answer.",
+      "error"
+    );
+  } finally {
+    confirmGiveUpButton.disabled = false;
+    cancelGiveUpButton.disabled = false;
+    closeGiveUpButton.disabled = false;
+  }
+}
+
 async function submitGuess(event) {
   event.preventDefault();
 
@@ -386,26 +581,15 @@ async function submitGuess(event) {
       throw new Error(data.error || "Guess failed.");
     }
 
-    guessedWords.add(data.guess);
-    guesses.unshift({
-      attempt: guesses.length + 1,
-      guess: data.guess,
-      rank: data.rank,
-      solved: data.solved,
+    const result = applyGuessResult(data, {
+      countsTowardScore: !gameFinished,
     });
-    guessInput.value = "";
-    renderGuesses();
+    setStatus(result.status, result.statusType);
 
-    if (data.solved) {
-      solvedAnswer = data.answer;
-      setSolvedState(data.answer);
-      setStatus("You found the secret word.", "success");
-
+    if (result.solved) {
       if (!resultPosted) {
         await postResult();
       }
-    } else {
-      setStatus(`"${data.guess}" is rank ${data.rank}.`);
     }
   } catch (error) {
     setStatus(
@@ -443,16 +627,48 @@ async function bootstrap() {
 bootstrap();
 playTodayButton.addEventListener("click", () => showScreen("game"));
 backButton.addEventListener("click", () => showScreen("home"));
+menuButton.addEventListener("click", (event) => {
+  event.stopPropagation();
+  toggleMenu();
+});
+hintButton.addEventListener("click", useHint);
+giveUpButton.addEventListener("click", () => {
+  closeMenu();
+  openGiveUpModal();
+});
 guessForm.addEventListener("submit", submitGuess);
 showTopWordsButton.addEventListener("click", showTopWords);
 closeTopWordsButton.addEventListener("click", closeTopWordsModal);
+closeGiveUpButton.addEventListener("click", closeGiveUpModal);
+cancelGiveUpButton.addEventListener("click", closeGiveUpModal);
+confirmGiveUpButton.addEventListener("click", confirmGiveUp);
 topWordsModal.addEventListener("click", (event) => {
   if (event.target === topWordsModal) {
     closeTopWordsModal();
   }
 });
+giveUpModal.addEventListener("click", (event) => {
+  if (event.target === giveUpModal) {
+    closeGiveUpModal();
+  }
+});
+document.addEventListener("click", (event) => {
+  if (!menuDropdown.hidden && !event.target.closest(".header-menu")) {
+    closeMenu();
+  }
+});
 window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !giveUpModal.hidden) {
+    closeGiveUpModal();
+    return;
+  }
+
   if (event.key === "Escape" && !topWordsModal.hidden) {
     closeTopWordsModal();
+    return;
+  }
+
+  if (event.key === "Escape" && !menuDropdown.hidden) {
+    closeMenu();
   }
 });

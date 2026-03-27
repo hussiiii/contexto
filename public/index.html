@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Contexto MVP</title>
-    <link rel="stylesheet" href="/styles.css?v=20260326-1" />
+    <link rel="stylesheet" href="/styles.css?v=20260326-2" />
   </head>
   <body>
     <main class="app-shell">
@@ -25,9 +25,21 @@
             &larr;
           </button>
           <h2 class="game-title">Contexto</h2>
-          <button class="icon-button" type="button" aria-label="Menu" disabled>
-            &#8942;
-          </button>
+          <div class="header-menu">
+            <button id="menu-button" class="icon-button" type="button" aria-label="Menu">
+              &#8942;
+            </button>
+            <div id="menu-dropdown" class="menu-dropdown" hidden>
+              <button id="hint-button" class="menu-item-button" type="button">
+                <span class="menu-item-icon" aria-hidden="true">&#128161;</span>
+                <span class="menu-item-label">Hint</span>
+              </button>
+              <button id="give-up-button" class="menu-item-button" type="button">
+                <span class="menu-item-icon" aria-hidden="true">&#9873;</span>
+                <span class="menu-item-label">Give up</span>
+              </button>
+            </div>
+          </div>
         </header>
 
         <div class="game-stats">
@@ -63,7 +75,7 @@
         </form>
 
         <section id="solve-banner" class="solve-banner" hidden>
-          <h3 class="solve-title">You solved it!</h3>
+          <h3 id="solve-title" class="solve-title">You solved it!</h3>
           <p id="solve-copy" class="solve-copy"></p>
           <button
             id="show-top-words-button"
@@ -140,6 +152,40 @@
       </section>
     </div>
 
-    <script type="module" src="/app.js?v=20260326-1"></script>
+    <div id="give-up-modal" class="modal-backdrop" hidden>
+      <section
+        class="modal-card confirm-modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="give-up-title"
+      >
+        <div class="modal-header">
+          <div>
+            <h3 id="give-up-title" class="modal-title">Give Up?</h3>
+            <p class="modal-subtitle">
+              Are you sure you want to give up? This will reveal today's answer.
+            </p>
+          </div>
+          <button
+            id="close-give-up-button"
+            class="icon-button modal-close-button"
+            type="button"
+            aria-label="Close"
+          >
+            &times;
+          </button>
+        </div>
+        <div class="modal-actions">
+          <button id="cancel-give-up-button" class="secondary-button modal-action-button" type="button">
+            No
+          </button>
+          <button id="confirm-give-up-button" class="danger-button modal-action-button" type="button">
+            Yes, give up
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/app.js?v=20260326-2"></script>
   </body>
   </html>
