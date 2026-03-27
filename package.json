@@ -13,6 +13,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "openai": "^6.33.0",
+    "pg": "^8.20.0",
     "popular-english-words": "^1.0.2"
   }
 }

@@ -33,6 +33,70 @@ body.modal-open {
   display: block;
 }
 
+.confetti-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.confetti-piece {
+  position: absolute;
+  opacity: 0;
+  animation-name: confetti-fall;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+  will-change: transform, opacity;
+}
+
+@keyframes confetti-fall {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, 0, 0)
+      rotate(var(--confetti-rotate-start, 0deg)) scale(0.92);
+  }
+  8% {
+    opacity: 0.96;
+  }
+  24% {
+    opacity: 1;
+    transform: translate3d(
+        var(--confetti-drift-one, 0px),
+        22vh,
+        0
+      )
+      rotate(var(--confetti-rotate-one, 180deg));
+  }
+  52% {
+    opacity: 0.98;
+    transform: translate3d(
+        var(--confetti-drift-two, 0px),
+        52vh,
+        0
+      )
+      rotate(var(--confetti-rotate-two, 360deg));
+  }
+  78% {
+    opacity: 0.88;
+    transform: translate3d(
+        calc(var(--confetti-drift-two, 0px) * -0.45),
+        78vh,
+        0
+      )
+      rotate(calc(var(--confetti-rotate-two, 360deg) * -0.55));
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(
+        var(--confetti-drift-three, 0px),
+        var(--confetti-fall-distance, 108vh),
+        0
+      )
+      rotate(var(--confetti-rotate-three, 540deg)) scale(0.95);
+  }
+}
+
 .hero-card {
   min-height: calc(100vh - 56px);
   display: flex;
@@ -505,6 +569,11 @@ body.modal-open {
 
 .confirm-modal-card {
   max-height: none;
+}
+
+#give-up-modal {
+  align-items: flex-start;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 92px);
 }
 
 .modal-header {

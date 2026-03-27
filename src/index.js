@@ -18,6 +18,7 @@ import {
   SlashCommandBuilder,
 } from "discord.js";
 import OpenAI from "openai";
+import { Pool } from "pg";
 import { words as popularWords } from "popular-english-words";
 
 dotenv.config();
@@ -25,8 +26,10 @@ dotenv.config();
 const {
   DISCORD_BOT_TOKEN,
   DISCORD_CLIENT_ID,
+  DISCORD_CLIENT_SECRET,
   DISCORD_GUILD_ID,
   DEFAULT_CHANNEL_ID,
+  DATABASE_URL,
   OPENAI_API_KEY,
   OPENAI_BASE_URL,
   PORT = "3000",
@@ -65,10 +68,20 @@ const OPENAI_EMBEDDING_MODEL =
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
 const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
+const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
       baseURL: OPENAI_BASE_URL || undefined,
+    })
+  : null;
+const progressPool = DATABASE_URL
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl:
+        DATABASE_URL.includes("localhost") || DATABASE_URL.includes("127.0.0.1")
+          ? undefined
+          : { rejectUnauthorized: false },
     })
   : null;
 const STOP_WORDS = new Set([
@@ -109,6 +122,7 @@ const guessScoreCache = new Map();
 let semanticPuzzlePromise;
 let acceptedWordsPromise;
 let allowedAnswersPromise;
+let progressStorageReadyPromise;
 
 const slashCommands = [
   new SlashCommandBuilder()
@@ -177,6 +191,253 @@ async function sendTestMessage({ channelId, requestedBy = "web-ui" }) {
 async function loadPuzzle() {
   const rawPuzzle = await fs.readFile(puzzleFilePath, "utf8");
   return JSON.parse(rawPuzzle);
+}
+
+function isProgressPersistenceEnabled() {
+  return Boolean(progressPool);
+}
+
+async function ensureProgressStorage() {
+  if (!progressPool) {
+    console.log(
+      "Postgres progress storage disabled: DATABASE_URL is not set. Player progress will not persist across sessions."
+    );
+    return;
+  }
+
+  if (!progressStorageReadyPromise) {
+    progressStorageReadyPromise = (async () => {
+      console.log("Initializing Postgres progress storage...");
+
+      await progressPool.query(`
+        CREATE TABLE IF NOT EXISTS player_progress (
+          user_id TEXT NOT NULL,
+          puzzle_id TEXT NOT NULL,
+          guild_id TEXT,
+          channel_id TEXT,
+          display_name TEXT NOT NULL,
+          avatar_url TEXT,
+          guesses_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+          solved_answer TEXT,
+          gave_up BOOLEAN NOT NULL DEFAULT FALSE,
+          result_posted BOOLEAN NOT NULL DEFAULT FALSE,
+          started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          finished_at TIMESTAMPTZ,
+          PRIMARY KEY (user_id, puzzle_id)
+        )
+      `);
+      await progressPool.query(`
+        CREATE INDEX IF NOT EXISTS player_progress_puzzle_id_idx
+        ON player_progress (puzzle_id)
+      `);
+
+      console.log("Postgres progress storage ready.");
+    })();
+  }
+
+  await progressStorageReadyPromise;
+}
+
+function normalizeOptionalText(value, maxLength = 255) {
+  const normalized = String(value || "").trim();
+  return normalized ? normalized.slice(0, maxLength) : null;
+}
+
+function normalizePlayerContext(rawPlayer) {
+  const userId = normalizeOptionalText(rawPlayer?.userId, 80);
+
+  if (!userId) {
+    return null;
+  }
+
+  return {
+    userId,
+    displayName:
+      normalizeOptionalText(rawPlayer?.displayName, 120) ||
+      normalizeOptionalText(rawPlayer?.username, 120) ||
+      "Player",
+    avatarUrl: normalizeOptionalText(rawPlayer?.avatarUrl, 500),
+    guildId: normalizeOptionalText(rawPlayer?.guildId, 80),
+    channelId: normalizeOptionalText(rawPlayer?.channelId, 80),
+  };
+}
+
+function normalizeStoredGuessEntry(rawEntry) {
+  const guess = normalizeGuess(rawEntry?.guess);
+  const rank = Number(rawEntry?.rank);
+
+  if (!guess || !Number.isFinite(rank) || rank <= 0) {
+    return null;
+  }
+
+  return {
+    guess,
+    rank: Math.round(rank),
+    solved: Boolean(rawEntry?.solved),
+    hinted: Boolean(rawEntry?.hinted),
+    revealed: Boolean(rawEntry?.revealed),
+    countsTowardScore: rawEntry?.countsTowardScore !== false,
+  };
+}
+
+function normalizeStoredGuesses(rawGuesses) {
+  if (!Array.isArray(rawGuesses)) {
+    return [];
+  }
+
+  return rawGuesses.map(normalizeStoredGuessEntry).filter(Boolean);
+}
+
+function countScoredGuesses(guesses) {
+  return guesses.filter((entry) => entry.countsTowardScore !== false).length;
+}
+
+function getBestRankFromGuesses(guesses) {
+  const scoredGuesses = guesses.filter((entry) => entry.countsTowardScore !== false);
+
+  if (scoredGuesses.length === 0) {
+    return null;
+  }
+
+  return Math.min(...scoredGuesses.map((entry) => entry.rank));
+}
+
+async function loadPlayerProgress(player, puzzleId) {
+  if (!progressPool || !player) {
+    return null;
+  }
+
+  await ensureProgressStorage();
+
+  const result = await progressPool.query(
+    `
+      SELECT
+        guesses_json,
+        solved_answer,
+        gave_up,
+        result_posted
+      FROM player_progress
+      WHERE user_id = $1 AND puzzle_id = $2
+      LIMIT 1
+    `,
+    [player.userId, puzzleId]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  const guesses = normalizeStoredGuesses(row.guesses_json);
+
+  return {
+    guesses,
+    solvedAnswer: normalizeOptionalText(row.solved_answer, 120),
+    gaveUp: Boolean(row.gave_up),
+    resultPosted: Boolean(row.result_posted),
+    guessCount: countScoredGuesses(guesses),
+    hintCount: guesses.filter((entry) => entry.hinted).length,
+    bestRank: getBestRankFromGuesses(guesses),
+  };
+}
+
+async function savePlayerProgress({
+  player,
+  puzzleId,
+  guesses,
+  solvedAnswer = null,
+  gaveUp = false,
+  resultPosted = false,
+}) {
+  if (!progressPool || !player) {
+    return;
+  }
+
+  await ensureProgressStorage();
+
+  const normalizedGuesses = normalizeStoredGuesses(guesses);
+  const normalizedSolvedAnswer = normalizeOptionalText(solvedAnswer, 120);
+  const finished = Boolean(normalizedSolvedAnswer || gaveUp);
+
+  await progressPool.query(
+    `
+      INSERT INTO player_progress (
+        user_id,
+        puzzle_id,
+        guild_id,
+        channel_id,
+        display_name,
+        avatar_url,
+        guesses_json,
+        solved_answer,
+        gave_up,
+        result_posted,
+        finished_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+      ON CONFLICT (user_id, puzzle_id)
+      DO UPDATE SET
+        guild_id = EXCLUDED.guild_id,
+        channel_id = EXCLUDED.channel_id,
+        display_name = EXCLUDED.display_name,
+        avatar_url = COALESCE(EXCLUDED.avatar_url, player_progress.avatar_url),
+        guesses_json = EXCLUDED.guesses_json,
+        solved_answer = EXCLUDED.solved_answer,
+        gave_up = EXCLUDED.gave_up,
+        result_posted = EXCLUDED.result_posted OR player_progress.result_posted,
+        updated_at = NOW(),
+        finished_at = CASE
+          WHEN EXCLUDED.finished_at IS NOT NULL
+            THEN COALESCE(player_progress.finished_at, EXCLUDED.finished_at)
+          ELSE player_progress.finished_at
+        END
+    `,
+    [
+      player.userId,
+      puzzleId,
+      player.guildId,
+      player.channelId,
+      player.displayName,
+      player.avatarUrl,
+      JSON.stringify(normalizedGuesses),
+      normalizedSolvedAnswer,
+      gaveUp,
+      resultPosted,
+      finished ? new Date().toISOString() : null,
+    ]
+  );
+}
+
+async function exchangeDiscordCodeForAccessToken(code) {
+  if (!DISCORD_CLIENT_SECRET) {
+    throw new Error(
+      "DISCORD_CLIENT_SECRET is required to authenticate Discord Activity users."
+    );
+  }
+
+  const response = await fetch(DISCORD_OAUTH_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      client_id: DISCORD_CLIENT_ID,
+      client_secret: DISCORD_CLIENT_SECRET,
+      grant_type: "authorization_code",
+      code: String(code || ""),
+    }),
+  });
+
+  const payload = await response.json().catch(async () => ({
+    error: await response.text(),
+  }));
+
+  if (!response.ok || !payload?.access_token) {
+    throw new Error(payload?.error_description || payload?.error || "Token exchange failed.");
+  }
+
+  return payload.access_token;
 }
 
 async function getAcceptedWords() {
@@ -990,7 +1251,26 @@ app.get("/api/config", (_req, res) => {
   res.json({
     ok: true,
     clientId: DISCORD_CLIENT_ID,
+    progressEnabled: isProgressPersistenceEnabled(),
+    discordAuthEnabled: Boolean(DISCORD_CLIENT_SECRET),
   });
+});
+
+app.post("/api/discord/token", async (req, res) => {
+  try {
+    const accessToken = await exchangeDiscordCodeForAccessToken(req.body?.code);
+
+    res.json({
+      ok: true,
+      access_token: accessToken,
+    });
+  } catch (error) {
+    console.error("Failed to exchange Discord auth code:", error);
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Token exchange failed.",
+    });
+  }
 });
 
 app.get("/api/puzzle", async (_req, res) => {
@@ -1015,6 +1295,25 @@ app.get("/api/puzzle", async (_req, res) => {
   }
 });
 
+app.post("/api/progress", async (req, res) => {
+  try {
+    const player = normalizePlayerContext(req.body?.player);
+    const puzzle = await loadPuzzle();
+    const progress = await loadPlayerProgress(player, puzzle.id);
+
+    res.json({
+      ok: true,
+      progress,
+    });
+  } catch (error) {
+    console.error("Failed to load player progress:", error);
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to load progress.",
+    });
+  }
+});
+
 app.get("/api/top-words", async (_req, res) => {
   try {
     const { semantic } = await getSemanticPuzzle();
@@ -1035,14 +1334,45 @@ app.get("/api/top-words", async (_req, res) => {
 
 app.post("/api/hint", async (req, res) => {
   try {
+    const player = normalizePlayerContext(req.body?.player);
+    const puzzle = await loadPuzzle();
+    const progress = await loadPlayerProgress(player, puzzle.id);
+    const alreadyFinished = Boolean(progress?.solvedAnswer);
     const result = await getHintGuess({
-      guessedWords: req.body?.guessedWords,
-      bestRank: Number(req.body?.bestRank),
+      guessedWords: progress?.guesses?.length
+        ? progress.guesses.map((entry) => entry.guess)
+        : req.body?.guessedWords,
+      bestRank: progress?.bestRank ?? Number(req.body?.bestRank),
     });
+    const countsTowardScore = !alreadyFinished;
+
+    if (player) {
+      const guesses = [
+        {
+          guess: result.guess,
+          rank: result.rank,
+          solved: false,
+          hinted: true,
+          revealed: false,
+          countsTowardScore,
+        },
+        ...(progress?.guesses || []),
+      ];
+
+      await savePlayerProgress({
+        player,
+        puzzleId: puzzle.id,
+        guesses,
+        solvedAnswer: progress?.solvedAnswer ?? null,
+        gaveUp: Boolean(progress?.gaveUp),
+        resultPosted: Boolean(progress?.resultPosted),
+      });
+    }
 
     res.json({
       ok: true,
       ...result,
+      countsTowardScore,
     });
   } catch (error) {
     console.error("Failed to load hint:", error);
@@ -1055,11 +1385,53 @@ app.post("/api/hint", async (req, res) => {
 
 app.post("/api/guess", async (req, res) => {
   try {
+    const player = normalizePlayerContext(req.body?.player);
+    const puzzle = await loadPuzzle();
+    const progress = await loadPlayerProgress(player, puzzle.id);
+    const normalizedGuess = normalizeGuess(req.body?.guess);
+
+    if (
+      normalizedGuess &&
+      progress?.guesses?.some((entry) => entry.guess === normalizedGuess)
+    ) {
+      throw new Error("You've already guessed that word. Try a new one.");
+    }
+
+    const alreadyFinished = Boolean(progress?.solvedAnswer);
     const result = await scoreGuess(req.body?.guess);
+    const countsTowardScore = !alreadyFinished;
+    const freshSolve = result.solved && !alreadyFinished;
+
+    if (player) {
+      const guesses = [
+        {
+          guess: result.guess,
+          rank: result.rank,
+          solved: result.solved,
+          hinted: false,
+          revealed: false,
+          countsTowardScore,
+        },
+        ...(progress?.guesses || []),
+      ];
+
+      await savePlayerProgress({
+        player,
+        puzzleId: puzzle.id,
+        guesses,
+        solvedAnswer: freshSolve
+          ? result.answer
+          : progress?.solvedAnswer ?? (result.solved ? result.answer : null),
+        gaveUp: Boolean(progress?.gaveUp),
+        resultPosted: Boolean(progress?.resultPosted),
+      });
+    }
 
     res.json({
       ok: true,
       ...result,
+      countsTowardScore,
+      freshSolve,
     });
   } catch (error) {
     console.error("Failed to score guess:", error);
@@ -1072,7 +1444,36 @@ app.post("/api/guess", async (req, res) => {
 
 app.post("/api/give-up", async (_req, res) => {
   try {
+    const player = normalizePlayerContext(_req.body?.player);
     const { puzzle } = await getSemanticPuzzle();
+    const progress = await loadPlayerProgress(player, puzzle.id);
+
+    if (player) {
+      const alreadyHasAnswer =
+        progress?.guesses?.some((entry) => entry.guess === puzzle.answer) || false;
+      const guesses = alreadyHasAnswer
+        ? progress?.guesses || []
+        : [
+            {
+              guess: puzzle.answer,
+              rank: 1,
+              solved: true,
+              hinted: false,
+              revealed: true,
+              countsTowardScore: false,
+            },
+            ...(progress?.guesses || []),
+          ];
+
+      await savePlayerProgress({
+        player,
+        puzzleId: puzzle.id,
+        guesses,
+        solvedAnswer: puzzle.answer,
+        gaveUp: true,
+        resultPosted: Boolean(progress?.resultPosted),
+      });
+    }
 
     res.json({
       ok: true,
@@ -1107,7 +1508,7 @@ app.post("/api/send-test-message", async (req, res) => {
 
 app.post("/api/post-result", async (req, res) => {
   try {
-    const { channelId, requestedBy, guessCount, bestRank, answer } = req.body ?? {};
+    const { channelId, requestedBy, guessCount, bestRank, answer, player } = req.body ?? {};
 
     if (!guessCount || !answer) {
       throw new Error("Missing guessCount or answer.");
@@ -1120,6 +1521,21 @@ app.post("/api/post-result", async (req, res) => {
       answer,
       bestRank: bestRank || 1,
     });
+
+    const normalizedPlayer = normalizePlayerContext(player);
+    const puzzle = await loadPuzzle();
+    const progress = await loadPlayerProgress(normalizedPlayer, puzzle.id);
+
+    if (normalizedPlayer && progress) {
+      await savePlayerProgress({
+        player: normalizedPlayer,
+        puzzleId: puzzle.id,
+        guesses: progress.guesses,
+        solvedAnswer: progress.solvedAnswer ?? answer,
+        gaveUp: progress.gaveUp,
+        resultPosted: true,
+      });
+    }
 
     res.json({
       ok: true,
@@ -1223,12 +1639,22 @@ client.on(Events.InteractionCreate, async (interaction) => {
   }
 });
 
-const server = app.listen(Number(PORT), () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
-});
+let server;
 
-client.login(DISCORD_BOT_TOKEN).catch((error) => {
-  console.error("Discord login failed:", error);
-  server.close();
+(async () => {
+  await ensureProgressStorage();
+
+  server = app.listen(Number(PORT), () => {
+    console.log(`Server listening on http://localhost:${PORT}`);
+  });
+
+  await client.login(DISCORD_BOT_TOKEN);
+})().catch((error) => {
+  console.error("Startup failed:", error);
+
+  if (server) {
+    server.close();
+  }
+
   process.exit(1);
 });

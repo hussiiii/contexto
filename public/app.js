@@ -11,6 +11,7 @@ const guessSubmitButton = document.getElementById("guess-submit-button");
 const statusText = document.getElementById("status");
 const guessInput = document.getElementById("guess-input");
 const guessCountText = document.getElementById("guess-count");
+const hintCountText = document.getElementById("hint-count");
 const emptyState = document.getElementById("empty-state");
 const latestGuessSection = document.getElementById("latest-guess-section");
 const latestGuess = document.getElementById("latest-guess");
@@ -25,12 +26,14 @@ const topWordsModal = document.getElementById("top-words-modal");
 const closeTopWordsButton = document.getElementById("close-top-words-button");
 const topWordsStatus = document.getElementById("top-words-status");
 const topWordsList = document.getElementById("top-words-list");
+const confettiLayer = document.getElementById("confetti-layer");
 const giveUpModal = document.getElementById("give-up-modal");
 const closeGiveUpButton = document.getElementById("close-give-up-button");
 const cancelGiveUpButton = document.getElementById("cancel-give-up-button");
 const confirmGiveUpButton = document.getElementById("confirm-give-up-button");
 
 const isEmbedded = window.self !== window.top;
+const LOCAL_PLAYER_STORAGE_KEY = "contexto-local-player-v1";
 const COMMON_WORDS = new Set([
   "about", "after", "again", "against", "all", "also", "although", "always",
   "among", "and", "another", "any", "are", "around", "because", "been",
@@ -62,6 +65,9 @@ let solvedAnswer = null;
 let topWords = null;
 let gameFinished = false;
 let gaveUp = false;
+let confettiTimeoutId = null;
+let currentPlayer = null;
+let discordSdk = null;
 
 function formatToday() {
   return new Intl.DateTimeFormat("en-US", {
@@ -100,6 +106,82 @@ function setStatus(message, type = "neutral") {
 function syncModalState() {
   const hasOpenModal = !topWordsModal.hidden || !giveUpModal.hidden;
   document.body.classList.toggle("modal-open", hasOpenModal);
+}
+
+function getOrCreateLocalPlayer() {
+  try {
+    const rawPlayer = window.localStorage.getItem(LOCAL_PLAYER_STORAGE_KEY);
+
+    if (rawPlayer) {
+      const parsed = JSON.parse(rawPlayer);
+
+      if (parsed?.userId && parsed?.displayName) {
+        return parsed;
+      }
+    }
+  } catch (_error) {
+    // Ignore malformed local debug identity and regenerate it below.
+  }
+
+  const generatedPlayer = {
+    userId: `web-${crypto.randomUUID()}`,
+    displayName: "Web Player",
+    avatarUrl: null,
+    guildId: null,
+    channelId: null,
+  };
+
+  window.localStorage.setItem(
+    LOCAL_PLAYER_STORAGE_KEY,
+    JSON.stringify(generatedPlayer)
+  );
+
+  return generatedPlayer;
+}
+
+function buildDiscordAvatarUrl(user) {
+  if (!user?.id || !user?.avatar) {
+    return null;
+  }
+
+  const extension = user.avatar.startsWith("a_") ? "gif" : "png";
+  return `https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.${extension}?size=128`;
+}
+
+function buildPlayerPayload() {
+  if (!currentPlayer) {
+    return null;
+  }
+
+  return {
+    userId: currentPlayer.userId,
+    displayName: currentPlayer.displayName,
+    avatarUrl: currentPlayer.avatarUrl,
+    guildId: currentPlayer.guildId || null,
+    channelId: launchChannelId || currentPlayer.channelId || null,
+  };
+}
+
+function resetGameState() {
+  guesses = [];
+  guessedWords = new Set();
+  resultPosted = false;
+  solvedAnswer = null;
+  topWords = null;
+  gameFinished = false;
+  gaveUp = false;
+  solveBanner.hidden = true;
+  solveBanner.dataset.state = "";
+  solveTitle.textContent = "You solved it!";
+  solveCopy.textContent = "";
+  showTopWordsButton.hidden = true;
+  guessInput.disabled = false;
+  guessSubmitButton.disabled = false;
+  hintButton.disabled = false;
+  giveUpButton.disabled = false;
+  menuButton.disabled = false;
+  guessInput.value = "";
+  closeMenu();
 }
 
 function renderTopWords(entries) {
@@ -228,6 +310,14 @@ function updateGuessCount() {
   guessCountText.textContent = String(getScoreGuessCount());
 }
 
+function getHintCount() {
+  return guesses.filter((entry) => entry.hinted).length;
+}
+
+function updateHintCount() {
+  hintCountText.textContent = String(getHintCount());
+}
+
 function getScoredGuesses() {
   return guesses.filter((entry) => entry.countsTowardScore !== false);
 }
@@ -302,6 +392,7 @@ function renderGuesses() {
   emptyState.hidden = guesses.length > 0;
   latestGuessSection.hidden = guesses.length === 0;
   updateGuessCount();
+  updateHintCount();
 
   if (guesses.length > 0) {
     latestGuess.append(createGuessRow(guesses[0], { isNew: true }));
@@ -314,7 +405,63 @@ function renderGuesses() {
   }
 }
 
-function setGameFinishedState(answer, { solved }) {
+function launchConfetti() {
+  if (!confettiLayer) {
+    return;
+  }
+
+  if (confettiTimeoutId) {
+    window.clearTimeout(confettiTimeoutId);
+  }
+
+  confettiLayer.innerHTML = "";
+  const colors = ["#86efac", "#facc15", "#60a5fa", "#f472b6", "#fb923c", "#c084fc"];
+  const pieceCount = 64;
+
+  for (let index = 0; index < pieceCount; index += 1) {
+    const piece = document.createElement("span");
+    const left = `${Math.random() * 100}%`;
+    const delay = `${Math.random() * 220}ms`;
+    const duration = `${3200 + Math.random() * 1900}ms`;
+    const driftOne = `${(Math.random() - 0.5) * 180}px`;
+    const driftTwo = `${(Math.random() - 0.5) * 260}px`;
+    const driftThree = `${(Math.random() - 0.5) * 360}px`;
+    const rotateStart = `${Math.random() * 180 - 90}deg`;
+    const rotateOne = `${Math.random() * 540 - 270}deg`;
+    const rotateTwo = `${Math.random() * 900 - 450}deg`;
+    const rotateThree = `${Math.random() * 1260 - 630}deg`;
+    const color = colors[index % colors.length];
+    const size = 6 + Math.round(Math.random() * 8);
+    const fallDistance = `${92 + Math.random() * 24}vh`;
+    const top = `${-24 - Math.random() * 120}px`;
+
+    piece.className = "confetti-piece";
+    piece.style.left = left;
+    piece.style.top = top;
+    piece.style.width = `${size}px`;
+    piece.style.height = `${Math.round(size * (1.2 + Math.random() * 1.1))}px`;
+    piece.style.background = color;
+    piece.style.borderRadius = `${1 + Math.random() * 4}px`;
+    piece.style.opacity = "0";
+    piece.style.animationDelay = delay;
+    piece.style.animationDuration = duration;
+    piece.style.setProperty("--confetti-drift-one", driftOne);
+    piece.style.setProperty("--confetti-drift-two", driftTwo);
+    piece.style.setProperty("--confetti-drift-three", driftThree);
+    piece.style.setProperty("--confetti-rotate-start", rotateStart);
+    piece.style.setProperty("--confetti-rotate-one", rotateOne);
+    piece.style.setProperty("--confetti-rotate-two", rotateTwo);
+    piece.style.setProperty("--confetti-rotate-three", rotateThree);
+    piece.style.setProperty("--confetti-fall-distance", fallDistance);
+    confettiLayer.append(piece);
+  }
+
+  confettiTimeoutId = window.setTimeout(() => {
+    confettiLayer.innerHTML = "";
+  }, 7800);
+}
+
+function setGameFinishedState(answer, { solved, celebrate = true } = {}) {
   gameFinished = true;
   gaveUp = !solved;
   solveBanner.hidden = false;
@@ -328,9 +475,16 @@ function setGameFinishedState(answer, { solved }) {
   giveUpButton.disabled = true;
   menuButton.disabled = true;
   closeMenu();
+
+  if (solved && celebrate) {
+    launchConfetti();
+  }
 }
 
-function applyGuessResult(data, { hinted = false, countsTowardScore = true } = {}) {
+function applyGuessResult(
+  data,
+  { hinted = false, countsTowardScore = true, freshSolve = data.solved } = {}
+) {
   guessedWords.add(data.guess);
   guesses.unshift({
     attempt: guesses.length + 1,
@@ -343,7 +497,7 @@ function applyGuessResult(data, { hinted = false, countsTowardScore = true } = {
   guessInput.value = "";
   renderGuesses();
 
-  if (data.solved) {
+  if (freshSolve) {
     solvedAnswer = data.answer;
     setGameFinishedState(data.answer, { solved: true });
     return {
@@ -403,13 +557,32 @@ async function loadConfig() {
   return data;
 }
 
-async function initializeDiscordSdk(clientId) {
+async function exchangeDiscordToken(code) {
+  const response = await fetch("/api/discord/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ code }),
+  });
+  const data = await response.json();
+
+  if (!response.ok || !data.ok || !data.access_token) {
+    throw new Error(data.error || "Failed to authenticate Discord user.");
+  }
+
+  return data.access_token;
+}
+
+async function initializeDiscordSdk(config) {
   if (!isEmbedded) {
+    currentPlayer = getOrCreateLocalPlayer();
+    activityLabel = currentPlayer.displayName;
     return;
   }
 
   const { DiscordSDK } = await import("/vendor/embedded-app-sdk/index.mjs");
-  const discordSdk = new DiscordSDK(clientId);
+  discordSdk = new DiscordSDK(config.clientId);
 
   await Promise.race([
     discordSdk.ready(),
@@ -423,10 +596,78 @@ async function initializeDiscordSdk(clientId) {
   requestedBy = "contexto-activity-ui";
   launchChannelId = discordSdk.channelId;
   activityLabel = "A Discord player";
+
+  if (!config.discordAuthEnabled) {
+    console.warn(
+      "Discord Activity auth is disabled because DISCORD_CLIENT_SECRET is not configured."
+    );
+    return;
+  }
+
+  const { code } = await discordSdk.commands.authorize({
+    client_id: config.clientId,
+    response_type: "code",
+    state: "",
+    prompt: "none",
+    scope: ["identify"],
+  });
+  const accessToken = await exchangeDiscordToken(code);
+  const auth = await discordSdk.commands.authenticate({
+    access_token: accessToken,
+  });
+
+  currentPlayer = {
+    userId: auth.user.id,
+    displayName: auth.user.global_name || auth.user.username,
+    avatarUrl: buildDiscordAvatarUrl(auth.user),
+    guildId: discordSdk.guildId,
+    channelId: discordSdk.channelId,
+  };
+  activityLabel = currentPlayer.displayName;
+}
+
+async function loadSavedProgress() {
+  if (!currentPlayer) {
+    return;
+  }
+
+  const response = await fetch("/api/progress", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      player: buildPlayerPayload(),
+    }),
+  });
+  const data = await response.json();
+
+  if (!response.ok || !data.ok) {
+    throw new Error(data.error || "Failed to restore saved progress.");
+  }
+
+  const progress = data.progress;
+
+  if (!progress) {
+    return;
+  }
+
+  guesses = Array.isArray(progress.guesses) ? progress.guesses : [];
+  guessedWords = new Set(guesses.map((entry) => entry.guess));
+  solvedAnswer = progress.solvedAnswer || null;
+  resultPosted = Boolean(progress.resultPosted);
+  renderGuesses();
+
+  if (solvedAnswer) {
+    setGameFinishedState(solvedAnswer, {
+      solved: !progress.gaveUp,
+      celebrate: false,
+    });
+  }
 }
 
 async function postResult() {
-  if (!puzzle || guesses.length === 0 || !solvedAnswer) {
+  if (!puzzle || getScoreGuessCount() === 0 || !solvedAnswer) {
     return;
   }
 
@@ -441,9 +682,10 @@ async function postResult() {
       body: JSON.stringify({
         channelId: launchChannelId || undefined,
         requestedBy: activityLabel,
-        guessCount: guesses.length,
+        guessCount: getScoreGuessCount(),
         bestRank: bestRank(),
         answer: solvedAnswer,
+        player: buildPlayerPayload(),
       }),
     });
 
@@ -479,6 +721,7 @@ async function useHint() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
+        player: buildPlayerPayload(),
         guessedWords: [...guessedWords],
         bestRank: bestRank(),
       }),
@@ -493,7 +736,10 @@ async function useHint() {
       throw new Error("No hint available.");
     }
 
-    const result = applyGuessResult(data, { hinted: true });
+    const result = applyGuessResult(data, {
+      hinted: true,
+      countsTowardScore: data.countsTowardScore !== false,
+    });
     setStatus(result.status, result.statusType);
   } catch (error) {
     setStatus(
@@ -517,6 +763,12 @@ async function confirmGiveUp() {
   try {
     const response = await fetch("/api/give-up", {
       method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        player: buildPlayerPayload(),
+      }),
     });
     const data = await response.json();
 
@@ -572,7 +824,10 @@ async function submitGuess(event) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ guess }),
+      body: JSON.stringify({
+        guess,
+        player: buildPlayerPayload(),
+      }),
     });
 
     const data = await response.json();
@@ -582,7 +837,8 @@ async function submitGuess(event) {
     }
 
     const result = applyGuessResult(data, {
-      countsTowardScore: !gameFinished,
+      countsTowardScore: data.countsTowardScore !== false,
+      freshSolve: Boolean(data.freshSolve),
     });
     setStatus(result.status, result.statusType);
 
@@ -602,21 +858,26 @@ async function submitGuess(event) {
 }
 
 async function bootstrap() {
+  resetGameState();
   setDates();
   renderGuesses();
 
   try {
     const config = await loadConfig();
     await loadPuzzle();
-    await initializeDiscordSdk(config.clientId);
+    await initializeDiscordSdk(config);
+    await loadSavedProgress();
 
-    if (launchChannelId) {
+    if (solvedAnswer) {
+      setStatus("Restored your saved progress.", "success");
+    } else if (guesses.length > 0) {
+      setStatus("Restored your saved progress.", "success");
+    } else if (launchChannelId) {
       setStatus(`Ready to post back into ${launchChannelId}.`);
     } else {
       setStatus("Ready.");
     }
   } catch (error) {
-    setSdkStatus("Unavailable");
     setStatus(
       error instanceof Error ? error.message : "Failed to initialize app.",
       "error"

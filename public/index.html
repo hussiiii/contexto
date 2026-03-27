@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Contexto MVP</title>
-    <link rel="stylesheet" href="/styles.css?v=20260326-2" />
+    <link rel="stylesheet" href="/styles.css?v=20260326-5" />
   </head>
   <body>
     <main class="app-shell">
@@ -45,6 +45,7 @@
         <div class="game-stats">
           <span id="game-date">03/25/2026</span>
           <span>Guesses: <strong id="guess-count">0</strong></span>
+          <span>Hints: <strong id="hint-count">0</strong></span>
         </div>
 
         <form id="guess-form" class="guess-form">
@@ -111,20 +112,24 @@
             <p>Find the secret word. You have unlimited guesses.</p>
             <p>
               The words are sorted by an artificial intelligence algorithm
-              according to how similar they are to the secret word.
+              according to how similar they are to the secret word. After 
+              submitting a word, you will see its position.
             </p>
             <p>
-              After submitting a word, you will see its position. The secret
-              word is number 1.
+              Click the three dots in the top right to use a hint or give 
+              up and reveal the word for the day. 
             </p>
             <p>
-              The algorithm analyzed thousands of texts. It uses the context in
-              which words are used to calculate the similarity between them.
+              Similarity is scored by an algorithm that analyzed thousands of 
+              texts. It uses the context in which words are used to calculate 
+              the similarity between them.
             </p>
           </div>
         </section>
       </section>
     </main>
+
+    <div id="confetti-layer" class="confetti-layer" aria-hidden="true"></div>
 
     <div id="top-words-modal" class="modal-backdrop" hidden>
       <section
@@ -186,6 +191,6 @@
       </section>
     </div>
 
-    <script type="module" src="/app.js?v=20260326-2"></script>
+    <script type="module" src="/app.js?v=20260326-5"></script>
   </body>
   </html>
