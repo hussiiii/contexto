@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import crypto from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -69,7 +70,9 @@ const OPENAI_EMBEDDING_MODEL =
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
 const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
+const APP_SESSION_TTL_DAYS = 30;
 const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
+const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
@@ -232,6 +235,25 @@ async function ensureProgressStorage() {
         CREATE INDEX IF NOT EXISTS player_progress_puzzle_id_idx
         ON player_progress (puzzle_id)
       `);
+      await progressPool.query(`
+        CREATE TABLE IF NOT EXISTS app_sessions (
+          session_token_hash TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          avatar_url TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          expires_at TIMESTAMPTZ NOT NULL
+        )
+      `);
+      await progressPool.query(`
+        CREATE INDEX IF NOT EXISTS app_sessions_user_id_idx
+        ON app_sessions (user_id)
+      `);
+      await progressPool.query(`
+        DELETE FROM app_sessions
+        WHERE expires_at <= NOW()
+      `);
 
       console.log("Postgres progress storage ready.");
     })();
@@ -262,6 +284,133 @@ function normalizePlayerContext(rawPlayer) {
     guildId: normalizeOptionalText(rawPlayer?.guildId, 80),
     channelId: normalizeOptionalText(rawPlayer?.channelId, 80),
   };
+}
+
+function hashSessionToken(sessionToken) {
+  return crypto.createHash("sha256").update(String(sessionToken || "")).digest("hex");
+}
+
+function createSessionToken() {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+function getSessionExpiryDate() {
+  return new Date(Date.now() + APP_SESSION_TTL_DAYS * 24 * 60 * 60 * 1000);
+}
+
+function overlaySessionContext(player, rawContext) {
+  if (!player) {
+    return null;
+  }
+
+  return {
+    ...player,
+    guildId: normalizeOptionalText(rawContext?.guildId, 80) || player.guildId || null,
+    channelId: normalizeOptionalText(rawContext?.channelId, 80) || player.channelId || null,
+  };
+}
+
+async function createAppSession(player) {
+  if (!progressPool || !player) {
+    return null;
+  }
+
+  await ensureProgressStorage();
+
+  const sessionToken = createSessionToken();
+  const expiresAt = getSessionExpiryDate();
+
+  await progressPool.query(
+    `
+      INSERT INTO app_sessions (
+        session_token_hash,
+        user_id,
+        display_name,
+        avatar_url,
+        expires_at
+      )
+      VALUES ($1, $2, $3, $4, $5)
+    `,
+    [
+      hashSessionToken(sessionToken),
+      player.userId,
+      player.displayName,
+      player.avatarUrl,
+      expiresAt.toISOString(),
+    ]
+  );
+
+  console.log(`Created app session for Discord user ${player.userId}.`);
+
+  return {
+    sessionToken,
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
+async function loadPlayerFromSession(sessionToken, rawContext) {
+  if (!progressPool) {
+    return null;
+  }
+
+  const normalizedToken = normalizeOptionalText(sessionToken, 512);
+
+  if (!normalizedToken) {
+    return null;
+  }
+
+  await ensureProgressStorage();
+
+  const result = await progressPool.query(
+    `
+      SELECT user_id, display_name, avatar_url
+      FROM app_sessions
+      WHERE session_token_hash = $1
+        AND expires_at > NOW()
+      LIMIT 1
+    `,
+    [hashSessionToken(normalizedToken)]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  const player = normalizePlayerContext({
+    userId: row.user_id,
+    displayName: row.display_name,
+    avatarUrl: row.avatar_url,
+  });
+
+  await progressPool.query(
+    `
+      UPDATE app_sessions
+      SET last_used_at = NOW(),
+          expires_at = $2
+      WHERE session_token_hash = $1
+    `,
+    [hashSessionToken(normalizedToken), getSessionExpiryDate().toISOString()]
+  );
+
+  return overlaySessionContext(player, rawContext);
+}
+
+async function resolvePlayerContext(rawRequestBody) {
+  const sessionPlayer = await loadPlayerFromSession(
+    rawRequestBody?.sessionToken,
+    rawRequestBody
+  );
+
+  if (sessionPlayer) {
+    return sessionPlayer;
+  }
+
+  if (rawRequestBody?.sessionToken) {
+    throw new Error("Your session expired. Please reopen the activity.");
+  }
+
+  return normalizePlayerContext(rawRequestBody?.player);
 }
 
 function normalizeStoredGuessEntry(rawEntry) {
@@ -460,6 +609,34 @@ async function exchangeDiscordCodeForAccessToken(code) {
   console.log("Discord token exchange succeeded.");
 
   return payload.access_token;
+}
+
+async function fetchDiscordOAuthUser(accessToken) {
+  const response = await fetch(DISCORD_OAUTH_ME_URL, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+
+  const payload = await response.json().catch(async () => ({
+    error: await response.text(),
+  }));
+
+  const oauthUser = payload?.user;
+
+  if (!response.ok || !oauthUser?.id) {
+    throw new Error(
+      payload?.message || payload?.error || "Failed to load authenticated Discord user."
+    );
+  }
+
+  return normalizePlayerContext({
+    userId: oauthUser.id,
+    displayName: oauthUser.global_name || oauthUser.username || "Discord Player",
+    avatarUrl: oauthUser.avatar
+      ? `https://cdn.discordapp.com/avatars/${oauthUser.id}/${oauthUser.avatar}.${oauthUser.avatar.startsWith("a_") ? "gif" : "png"}?size=128`
+      : null,
+  });
 }
 
 async function getAcceptedWords() {
@@ -1314,6 +1491,64 @@ app.post("/api/discord/token", async (req, res) => {
   }
 });
 
+app.post("/api/discord/login", async (req, res) => {
+  try {
+    console.log("Received Discord login request.");
+    const accessToken = await exchangeDiscordCodeForAccessToken(req.body?.code);
+    const discordPlayer = await fetchDiscordOAuthUser(accessToken);
+
+    if (!discordPlayer) {
+      throw new Error("Discord login succeeded, but no user identity was returned.");
+    }
+
+    const session = await createAppSession(
+      overlaySessionContext(discordPlayer, req.body)
+    );
+
+    if (!session) {
+      throw new Error("App session storage is unavailable.");
+    }
+
+    res.json({
+      ok: true,
+      player: overlaySessionContext(discordPlayer, req.body),
+      sessionToken: session.sessionToken,
+      sessionExpiresAt: session.expiresAt,
+    });
+  } catch (error) {
+    console.error("Failed to log in Discord user:", error);
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Discord login failed.",
+    });
+  }
+});
+
+app.post("/api/session", async (req, res) => {
+  try {
+    const player = await loadPlayerFromSession(req.body?.sessionToken, req.body);
+
+    if (!player) {
+      res.status(401).json({
+        ok: false,
+        error: "Session expired. Please reopen the activity.",
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      player,
+    });
+  } catch (error) {
+    console.error("Failed to restore app session:", error);
+    res.status(400).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to restore session.",
+    });
+  }
+});
+
 app.get("/api/puzzle", async (_req, res) => {
   try {
     const puzzle = await loadPuzzle();
@@ -1338,7 +1573,7 @@ app.get("/api/puzzle", async (_req, res) => {
 
 app.post("/api/progress", async (req, res) => {
   try {
-    const player = normalizePlayerContext(req.body?.player);
+    const player = await resolvePlayerContext(req.body);
     const puzzle = await loadPuzzle();
     console.log("Loading player progress.", {
       hasPlayer: Boolean(player),
@@ -1380,7 +1615,7 @@ app.get("/api/top-words", async (_req, res) => {
 
 app.post("/api/hint", async (req, res) => {
   try {
-    const player = normalizePlayerContext(req.body?.player);
+    const player = await resolvePlayerContext(req.body);
     const puzzle = await loadPuzzle();
     console.log("Hint request received.", {
       hasPlayer: Boolean(player),
@@ -1436,7 +1671,7 @@ app.post("/api/hint", async (req, res) => {
 
 app.post("/api/guess", async (req, res) => {
   try {
-    const player = normalizePlayerContext(req.body?.player);
+    const player = await resolvePlayerContext(req.body);
     const puzzle = await loadPuzzle();
     console.log("Guess request received.", {
       hasPlayer: Boolean(player),
@@ -1501,7 +1736,7 @@ app.post("/api/guess", async (req, res) => {
 
 app.post("/api/give-up", async (_req, res) => {
   try {
-    const player = normalizePlayerContext(_req.body?.player);
+    const player = await resolvePlayerContext(_req.body);
     const { puzzle } = await getSemanticPuzzle();
     console.log("Give-up request received.", {
       hasPlayer: Boolean(player),
@@ -1570,8 +1805,8 @@ app.post("/api/send-test-message", async (req, res) => {
 
 app.post("/api/post-result", async (req, res) => {
   try {
-    const { channelId, requestedBy, guessCount, bestRank, answer, player } = req.body ?? {};
-    const normalizedPlayer = normalizePlayerContext(player);
+    const { channelId, requestedBy, guessCount, bestRank, answer } = req.body ?? {};
+    const normalizedPlayer = await resolvePlayerContext(req.body);
     console.log("Post-result request received.", {
       hasPlayer: Boolean(normalizedPlayer),
       userId: normalizedPlayer?.userId || null,

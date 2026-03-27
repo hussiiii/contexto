@@ -34,6 +34,7 @@ const confirmGiveUpButton = document.getElementById("confirm-give-up-button");
 
 const isEmbedded = window.self !== window.top;
 const LOCAL_PLAYER_STORAGE_KEY = "contexto-local-player-v1";
+const LOCAL_SESSION_STORAGE_KEY = "contexto-discord-session-v1";
 const COMMON_WORDS = new Set([
   "about", "after", "again", "against", "all", "also", "although", "always",
   "among", "and", "another", "any", "are", "around", "because", "been",
@@ -67,6 +68,7 @@ let gameFinished = false;
 let gaveUp = false;
 let confettiTimeoutId = null;
 let currentPlayer = null;
+let currentSessionToken = null;
 let discordSdk = null;
 
 function formatToday() {
@@ -184,6 +186,50 @@ function buildPlayerPayload() {
     guildId: currentPlayer.guildId || null,
     channelId: launchChannelId || currentPlayer.channelId || null,
   };
+}
+
+function getSessionContext() {
+  return {
+    guildId: discordSdk?.guildId || currentPlayer?.guildId || null,
+    channelId: launchChannelId || discordSdk?.channelId || currentPlayer?.channelId || null,
+  };
+}
+
+function buildAuthPayload(extra = {}) {
+  if (currentSessionToken) {
+    return {
+      sessionToken: currentSessionToken,
+      ...getSessionContext(),
+      ...extra,
+    };
+  }
+
+  return {
+    player: buildPlayerPayload(),
+    ...extra,
+  };
+}
+
+function loadStoredSessionToken() {
+  try {
+    return window.localStorage.getItem(LOCAL_SESSION_STORAGE_KEY);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function storeSessionToken(sessionToken) {
+  currentSessionToken = sessionToken || null;
+
+  try {
+    if (sessionToken) {
+      window.localStorage.setItem(LOCAL_SESSION_STORAGE_KEY, sessionToken);
+    } else {
+      window.localStorage.removeItem(LOCAL_SESSION_STORAGE_KEY);
+    }
+  } catch (_error) {
+    // Ignore storage failures and continue with in-memory session state.
+  }
 }
 
 function resetGameState() {
@@ -580,21 +626,49 @@ async function loadConfig() {
   return data;
 }
 
-async function exchangeDiscordToken(code) {
-  const response = await fetch("/api/discord/token", {
+async function restoreStoredSession(sessionToken) {
+  const response = await fetch("/api/session", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({
+      sessionToken,
+      ...getSessionContext(),
+    }),
+  });
+
+  if (response.status === 401) {
+    return null;
+  }
+
+  const data = await response.json();
+
+  if (!response.ok || !data.ok || !data.player) {
+    throw new Error(data.error || "Failed to restore Discord session.");
+  }
+
+  return data.player;
+}
+
+async function loginWithDiscordCode(code) {
+  const response = await fetch("/api/discord/login", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      code,
+      ...getSessionContext(),
+    }),
   });
   const data = await response.json();
 
-  if (!response.ok || !data.ok || !data.access_token) {
+  if (!response.ok || !data.ok || !data.player || !data.sessionToken) {
     throw new Error(data.error || "Failed to authenticate Discord user.");
   }
 
-  return data.access_token;
+  return data;
 }
 
 async function initializeDiscordSdk(config) {
@@ -640,6 +714,35 @@ async function initializeDiscordSdk(config) {
     throw new Error("DISCORD_REDIRECT_URI is not configured on the server.");
   }
 
+  const storedSessionToken = loadStoredSessionToken();
+
+  if (storedSessionToken) {
+    setStatus("Restoring your session...");
+
+    try {
+      const restoredPlayer = await restoreStoredSession(storedSessionToken);
+
+      if (restoredPlayer) {
+        currentPlayer = restoredPlayer;
+        storeSessionToken(storedSessionToken);
+        activityLabel = currentPlayer.displayName;
+        await reportClientLog("info", "Restored existing app session.", {
+          userId: currentPlayer.userId,
+          displayName: currentPlayer.displayName,
+        });
+        return;
+      }
+
+      await reportClientLog("warn", "Stored app session expired; requesting fresh Discord auth.");
+      storeSessionToken(null);
+    } catch (error) {
+      await reportClientLog("error", "Stored app session restore failed.", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      storeSessionToken(null);
+    }
+  }
+
   setStatus("Authorizing with Discord...");
   let code;
 
@@ -662,22 +765,12 @@ async function initializeDiscordSdk(config) {
 
   await reportClientLog("info", "Discord authorize succeeded.");
 
-  setStatus("Authenticating Discord user...");
-  const accessToken = await exchangeDiscordToken(code);
-  await reportClientLog("info", "Discord token exchange succeeded.");
-  const auth = await discordSdk.commands.authenticate({
-    access_token: accessToken,
-  });
-
-  currentPlayer = {
-    userId: auth.user.id,
-    displayName: auth.user.global_name || auth.user.username,
-    avatarUrl: buildDiscordAvatarUrl(auth.user),
-    guildId: discordSdk.guildId,
-    channelId: discordSdk.channelId,
-  };
+  setStatus("Signing you in...");
+  const login = await loginWithDiscordCode(code);
+  currentPlayer = login.player;
+  storeSessionToken(login.sessionToken);
   activityLabel = currentPlayer.displayName;
-  await reportClientLog("info", "Discord authenticate succeeded.", {
+  await reportClientLog("info", "Discord login succeeded.", {
     userId: currentPlayer.userId,
     displayName: currentPlayer.displayName,
   });
@@ -695,9 +788,7 @@ async function loadSavedProgress() {
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      player: buildPlayerPayload(),
-    }),
+    body: JSON.stringify(buildAuthPayload()),
   });
   const data = await response.json();
 
@@ -744,7 +835,7 @@ async function postResult() {
         guessCount: getScoreGuessCount(),
         bestRank: bestRank(),
         answer: solvedAnswer,
-        player: buildPlayerPayload(),
+        ...buildAuthPayload(),
       }),
     });
 
@@ -780,7 +871,7 @@ async function useHint() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        player: buildPlayerPayload(),
+        ...buildAuthPayload(),
         guessedWords: [...guessedWords],
         bestRank: bestRank(),
       }),
@@ -826,7 +917,7 @@ async function confirmGiveUp() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        player: buildPlayerPayload(),
+        ...buildAuthPayload(),
       }),
     });
     const data = await response.json();
@@ -885,7 +976,7 @@ async function submitGuess(event) {
       },
       body: JSON.stringify({
         guess,
-        player: buildPlayerPayload(),
+        ...buildAuthPayload(),
       }),
     });
 
