@@ -1316,7 +1316,7 @@ app.post("/api/discord/token", async (req, res) => {
 
 app.get("/api/puzzle", async (_req, res) => {
   try {
-    const { puzzle, semantic } = await getSemanticPuzzle();
+    const puzzle = await loadPuzzle();
 
     res.json({
       ok: true,
@@ -1324,7 +1324,7 @@ app.get("/api/puzzle", async (_req, res) => {
         id: puzzle.id,
         date: puzzle.date,
         answerLength: puzzle.answer.length,
-        totalRankedWords: semantic.vocabularySize,
+        totalRankedWords: RANKING_VOCAB_SIZE,
       },
     });
   } catch (error) {

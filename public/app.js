@@ -103,6 +103,11 @@ function setStatus(message, type = "neutral") {
   statusText.dataset.state = type;
 }
 
+function setGuessControlsEnabled(enabled) {
+  guessInput.disabled = !enabled;
+  guessSubmitButton.disabled = !enabled;
+}
+
 async function reportClientLog(level, message, extra = {}) {
   try {
     await fetch("/api/client-log", {
@@ -194,8 +199,7 @@ function resetGameState() {
   solveTitle.textContent = "You solved it!";
   solveCopy.textContent = "";
   showTopWordsButton.hidden = true;
-  guessInput.disabled = false;
-  guessSubmitButton.disabled = false;
+  setGuessControlsEnabled(false);
   hintButton.disabled = false;
   giveUpButton.disabled = false;
   menuButton.disabled = false;
@@ -921,7 +925,14 @@ async function bootstrap() {
     const config = await loadConfig();
     await loadPuzzle();
     await initializeDiscordSdk(config);
-    await loadSavedProgress();
+    setGuessControlsEnabled(true);
+
+    if (currentPlayer) {
+      setGuessControlsEnabled(false);
+      setStatus("Fetching progress...");
+      await loadSavedProgress();
+      setGuessControlsEnabled(true);
+    }
 
     if (solvedAnswer) {
       setStatus("Restored your saved progress.", "success");
@@ -945,6 +956,7 @@ async function bootstrap() {
       `${message} Progress will not be saved until Discord sign-in works.`,
       "error"
     );
+    setGuessControlsEnabled(Boolean(puzzle));
   }
 }
 
