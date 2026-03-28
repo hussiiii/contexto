@@ -59,16 +59,7 @@ if (missingEnvVars.length > 0) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, "..");
-const puzzleFilePath = path.join(projectRoot, "data", "puzzles", "sample.json");
-const generatedDataDirectory = path.join(projectRoot, "data", "generated");
-const semanticCacheFilePath = path.join(
-  generatedDataDirectory,
-  "sample-semantic-cache.json"
-);
-const answersFilePath = path.join(
-  generatedDataDirectory,
-  "answers.json"
-);
+const answersFilePath = path.join(projectRoot, "data", "generated", "answers.json");
 const progressCardFontRegularPath = path.join(
   projectRoot,
   "node_modules",
@@ -94,6 +85,10 @@ const APP_SESSION_TTL_DAYS = 30;
 const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
 const CONTEXTO_EPOCH_DATE = "2026-03-25";
+const PUZZLE_TIMEZONE = "America/Los_Angeles";
+const PRECOMPUTE_TRIGGER_TOKEN = process.env.PRECOMPUTE_TRIGGER_TOKEN || "";
+const PUZZLE_DATE_OVERRIDE = String(process.env.PUZZLE_DATE_OVERRIDE || "").trim() || null;
+const PUZZLE_ANSWER_OVERRIDE = String(process.env.PUZZLE_ANSWER_OVERRIDE || "").trim() || null;
 
 const openai = OPENAI_API_KEY
   ? new OpenAI({
@@ -147,9 +142,11 @@ const PLAY_BUTTON_ID = "contexto-play";
 const guessScoreCache = new Map();
 const avatarDataUriCache = new Map();
 let progressCardFontsPromise;
-let semanticPuzzlePromise;
+const semanticPuzzlePromises = new Map();
+let orderedAnswersPromise;
 let acceptedWordsPromise;
 let allowedAnswersPromise;
+let rankingVocabularyPromise;
 let progressStorageReadyPromise;
 
 const slashCommands = [
@@ -177,9 +174,113 @@ async function registerGuildCommands() {
   console.log("Registered guild slash commands.");
 }
 
+function getDatePartsInTimeZone(date = new Date(), timeZone = PUZZLE_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return {
+    year: values.year,
+    month: values.month,
+    day: values.day,
+    hour: values.hour,
+    minute: values.minute,
+    second: values.second,
+  };
+}
+
+function getCurrentPuzzleDateId(date = new Date()) {
+  const parts = getDatePartsInTimeZone(date);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatPuzzleDate(dateId) {
+  const [year, month, day] = String(dateId || "").split("-");
+
+  if (!year || !month || !day) {
+    throw new Error(`Invalid puzzle date: "${dateId}"`);
+  }
+
+  return `${month}/${day}/${year}`;
+}
+
+function getPuzzleSequenceNumber(dateId) {
+  const epoch = new Date(`${CONTEXTO_EPOCH_DATE}T00:00:00Z`);
+  const current = new Date(`${dateId}T00:00:00Z`);
+
+  if (Number.isNaN(epoch.getTime()) || Number.isNaN(current.getTime())) {
+    throw new Error(`Invalid puzzle date: "${dateId}"`);
+  }
+
+  return Math.round((current.getTime() - epoch.getTime()) / 86400000) + 1;
+}
+
+function normalizePuzzleDateOverride(dateId) {
+  const trimmed = String(dateId || "").trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+async function getOrderedAnswers() {
+  if (!orderedAnswersPromise) {
+    orderedAnswersPromise = (async () => {
+      let parsedAnswers;
+
+      try {
+        const rawAnswers = await fs.readFile(answersFilePath, "utf8");
+        const parsed = JSON.parse(rawAnswers);
+        parsedAnswers = Array.isArray(parsed) ? parsed : parsed.words;
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          throw new Error(
+            "Missing answer list. Add data/generated/answers.json with your ordered puzzle answers."
+          );
+        }
+
+        throw error;
+      }
+
+      if (!Array.isArray(parsedAnswers) || parsedAnswers.length === 0) {
+        throw new Error(
+          "Answer list is empty or invalid. Check data/generated/answers.json."
+        );
+      }
+
+      const orderedAnswers = parsedAnswers.map((word) => normalizeGuess(word)).filter(Boolean);
+
+      if (orderedAnswers.length === 0) {
+        throw new Error(
+          "Answer list is empty after normalization. Check data/generated/answers.json."
+        );
+      }
+
+      return orderedAnswers;
+    })();
+  }
+
+  return orderedAnswersPromise;
+}
+
 async function loadPuzzle() {
-  const rawPuzzle = await fs.readFile(puzzleFilePath, "utf8");
-  return JSON.parse(rawPuzzle);
+  const puzzleDateId = normalizePuzzleDateOverride(PUZZLE_DATE_OVERRIDE) || getCurrentPuzzleDateId();
+  const orderedAnswers = await getOrderedAnswers();
+  const contextoNumber = getPuzzleSequenceNumber(puzzleDateId);
+  const answerIndex = ((contextoNumber - 1) % orderedAnswers.length + orderedAnswers.length) % orderedAnswers.length;
+  const answer = normalizeGuess(PUZZLE_ANSWER_OVERRIDE) || orderedAnswers[answerIndex];
+
+  return {
+    id: puzzleDateId,
+    date: formatPuzzleDate(puzzleDateId),
+    answer,
+    contextoNumber,
+  };
 }
 
 function isProgressPersistenceEnabled() {
@@ -245,6 +346,20 @@ async function ensureProgressStorage() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (user_id, puzzle_id, channel_id)
+        )
+      `);
+      await progressPool.query(`
+        CREATE TABLE IF NOT EXISTS daily_puzzle_cache (
+          puzzle_id TEXT PRIMARY KEY,
+          puzzle_date TEXT NOT NULL,
+          answer TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model_id TEXT NOT NULL,
+          scoring_version TEXT NOT NULL,
+          vocabulary_size INTEGER NOT NULL,
+          cache_json JSONB NOT NULL,
+          generated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
       `);
       await progressPool.query(`
@@ -593,6 +708,10 @@ function getGuessTone(rank) {
 }
 
 function getContextoNumber(puzzle) {
+  if (Number.isFinite(Number(puzzle?.contextoNumber))) {
+    return Number(puzzle.contextoNumber);
+  }
+
   const puzzleId = normalizeOptionalText(puzzle?.id, 40);
 
   if (!puzzleId) {
@@ -1605,47 +1724,29 @@ function findRankFromSortedScores(sortedScores, score) {
 }
 
 async function buildRankingVocabulary() {
-  const filteredWords = popularWords.getMostPopularFilter(RANKING_VOCAB_SIZE, (word) => {
-    const normalizedWord = normalizeGuess(word);
+  if (!rankingVocabularyPromise) {
+    rankingVocabularyPromise = Promise.resolve().then(() => {
+      const filteredWords = popularWords.getMostPopularFilter(RANKING_VOCAB_SIZE, (word) => {
+        const normalizedWord = normalizeGuess(word);
 
-    return (
-      normalizedWord &&
-      normalizedWord.length >= 3 &&
-      normalizedWord.length <= 16 &&
-      !STOP_WORDS.has(normalizedWord)
-    );
-  });
+        return (
+          normalizedWord &&
+          normalizedWord.length >= 3 &&
+          normalizedWord.length <= 16 &&
+          !STOP_WORDS.has(normalizedWord)
+        );
+      });
 
-  return [...new Set(filteredWords)];
+      return [...new Set(filteredWords)];
+    });
+  }
+
+  return rankingVocabularyPromise;
 }
 
 async function getAllowedAnswers() {
   if (!allowedAnswersPromise) {
-    allowedAnswersPromise = (async () => {
-      let parsedAnswers;
-
-      try {
-        const rawAnswers = await fs.readFile(answersFilePath, "utf8");
-        const parsed = JSON.parse(rawAnswers);
-        parsedAnswers = Array.isArray(parsed) ? parsed : parsed.words;
-      } catch (error) {
-        if (error?.code === "ENOENT") {
-          throw new Error(
-            "Missing answer list. Add data/generated/answers.json with your ordered puzzle answers."
-          );
-        }
-
-        throw error;
-      }
-
-      if (!Array.isArray(parsedAnswers) || parsedAnswers.length === 0) {
-        throw new Error(
-          "Answer list is empty or invalid. Check data/generated/answers.json."
-        );
-      }
-
-      return new Set(parsedAnswers.map((word) => normalizeGuess(word)).filter(Boolean));
-    })();
+    allowedAnswersPromise = getOrderedAnswers().then((answers) => new Set(answers));
   }
 
   return allowedAnswersPromise;
@@ -1763,27 +1864,103 @@ function hydrateSemanticCache(cache) {
   };
 }
 
+function serializeSemanticCache(semantic) {
+  return {
+    provider: semantic.provider,
+    modelId: semantic.modelId,
+    scoringVersion: semantic.scoringVersion,
+    puzzleId: semantic.puzzleId,
+    answer: semantic.answer,
+    answerEmbedding: semantic.answerEmbedding,
+    vocabularySize: semantic.vocabularySize,
+    rankedWords: semantic.rankedWords,
+    sortedScores: semantic.sortedScores,
+    cachedGuessScores: Object.fromEntries(semantic.cachedGuessScoresMap || []),
+  };
+}
+
+async function loadPersistedSemanticCache(puzzle, vocabularySize) {
+  if (!progressPool) {
+    return null;
+  }
+
+  await ensureProgressStorage();
+
+  const result = await progressPool.query(
+    `
+      SELECT cache_json
+      FROM daily_puzzle_cache
+      WHERE puzzle_id = $1
+      LIMIT 1
+    `,
+    [puzzle.id]
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const parsedCache = result.rows[0].cache_json;
+
+  if (
+    parsedCache?.provider === "openai" &&
+    parsedCache?.modelId === OPENAI_EMBEDDING_MODEL &&
+    parsedCache?.scoringVersion === SCORING_VERSION &&
+    parsedCache?.puzzleId === puzzle.id &&
+    parsedCache?.answer === puzzle.answer &&
+    parsedCache?.vocabularySize === vocabularySize
+  ) {
+    return hydrateSemanticCache(parsedCache);
+  }
+
+  return null;
+}
+
 async function persistSemanticCache(semantic) {
-  await fs.mkdir(generatedDataDirectory, { recursive: true });
-  await fs.writeFile(
-    semanticCacheFilePath,
-    JSON.stringify(
-      {
-        provider: semantic.provider,
-        modelId: semantic.modelId,
-        scoringVersion: semantic.scoringVersion,
-        puzzleId: semantic.puzzleId,
-        answer: semantic.answer,
-        answerEmbedding: semantic.answerEmbedding,
-        vocabularySize: semantic.vocabularySize,
-        rankedWords: semantic.rankedWords,
-        sortedScores: semantic.sortedScores,
-        cachedGuessScores: Object.fromEntries(semantic.cachedGuessScoresMap),
-      },
-      null,
-      2
-    ),
-    "utf8"
+  if (!progressPool) {
+    return;
+  }
+
+  await ensureProgressStorage();
+
+  const serialized = serializeSemanticCache(semantic);
+
+  await progressPool.query(
+    `
+      INSERT INTO daily_puzzle_cache (
+        puzzle_id,
+        puzzle_date,
+        answer,
+        provider,
+        model_id,
+        scoring_version,
+        vocabulary_size,
+        cache_json,
+        generated_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW(), NOW())
+      ON CONFLICT (puzzle_id)
+      DO UPDATE SET
+        puzzle_date = EXCLUDED.puzzle_date,
+        answer = EXCLUDED.answer,
+        provider = EXCLUDED.provider,
+        model_id = EXCLUDED.model_id,
+        scoring_version = EXCLUDED.scoring_version,
+        vocabulary_size = EXCLUDED.vocabulary_size,
+        cache_json = EXCLUDED.cache_json,
+        updated_at = NOW()
+    `,
+    [
+      semantic.puzzleId,
+      semantic.puzzleId,
+      semantic.answer,
+      semantic.provider,
+      semantic.modelId,
+      semantic.scoringVersion,
+      semantic.vocabularySize,
+      JSON.stringify(serialized),
+    ]
   );
 }
 
@@ -1792,12 +1969,12 @@ async function generateSemanticCache(puzzle) {
     `Generating API-backed semantic cache for "${puzzle.answer}" using ${RANKING_VOCAB_SIZE} words...`
   );
 
-  const answerEmbedding = (await embedTexts([puzzle.answer]))[0];
   const [allowedAnswers, vocabulary] = await Promise.all([
     getAllowedAnswers(),
     buildRankingVocabulary(),
   ]);
   validatePuzzleAnswer(puzzle.answer, allowedAnswers);
+  const answerEmbedding = (await embedTexts([puzzle.answer]))[0];
   const rankedWords = [];
   const startedAt = Date.now();
   const totalBatches = Math.ceil(vocabulary.length / EMBEDDING_BATCH_SIZE);
@@ -1863,49 +2040,77 @@ async function generateSemanticCache(puzzle) {
   return hydratedCache;
 }
 
-async function getSemanticPuzzle() {
-  if (!semanticPuzzlePromise) {
-    semanticPuzzlePromise = (async () => {
-      const puzzle = await loadPuzzle();
-      const [allowedAnswers, vocabulary] = await Promise.all([
-        getAllowedAnswers(),
-        buildRankingVocabulary(),
-      ]);
-      validatePuzzleAnswer(puzzle.answer, allowedAnswers);
+async function loadOrGenerateSemanticPuzzle(puzzle, { forceRefresh = false } = {}) {
+  const [allowedAnswers, vocabulary] = await Promise.all([
+    getAllowedAnswers(),
+    buildRankingVocabulary(),
+  ]);
 
-      try {
-        const rawCache = await fs.readFile(semanticCacheFilePath, "utf8");
-        const parsedCache = JSON.parse(rawCache);
-
-        if (
-          parsedCache.provider === "openai" &&
-          parsedCache.modelId === OPENAI_EMBEDDING_MODEL &&
-          parsedCache.scoringVersion === SCORING_VERSION &&
-          parsedCache.puzzleId === puzzle.id &&
-          parsedCache.answer === puzzle.answer &&
-          parsedCache.vocabularySize === vocabulary.length
-        ) {
-          return {
-            puzzle,
-            semantic: hydrateSemanticCache(parsedCache),
-          };
-        }
-      } catch (error) {
-        if (error?.code !== "ENOENT") {
-          console.warn("Falling back to regenerating semantic cache:", error);
-        }
-      }
-
-      const semantic = await generateSemanticCache(puzzle);
-
-      return {
-        puzzle,
-        semantic,
-      };
-    })();
+  if (!PUZZLE_ANSWER_OVERRIDE) {
+    validatePuzzleAnswer(puzzle.answer, allowedAnswers);
   }
 
-  return semanticPuzzlePromise;
+  if (!forceRefresh) {
+    const persistedCache = await loadPersistedSemanticCache(puzzle, vocabulary.length);
+
+    if (persistedCache) {
+      return {
+        puzzle,
+        semantic: persistedCache,
+      };
+    }
+  }
+
+  const semantic = await generateSemanticCache(puzzle);
+  return {
+    puzzle,
+    semantic,
+  };
+}
+
+async function getSemanticPuzzle({ forceRefresh = false } = {}) {
+  const puzzle = await loadPuzzle();
+  const promiseKey = forceRefresh ? `${puzzle.id}:force` : puzzle.id;
+
+  for (const key of semanticPuzzlePromises.keys()) {
+    if (!key.startsWith(puzzle.id)) {
+      semanticPuzzlePromises.delete(key);
+    }
+  }
+
+  if (!semanticPuzzlePromises.has(promiseKey)) {
+    semanticPuzzlePromises.set(
+      promiseKey,
+      loadOrGenerateSemanticPuzzle(puzzle, { forceRefresh }).finally(() => {
+        if (forceRefresh) {
+          semanticPuzzlePromises.delete(promiseKey);
+        }
+      })
+    );
+  }
+
+  return semanticPuzzlePromises.get(promiseKey);
+}
+
+async function precomputeTodayPuzzle({ forceRefresh = false } = {}) {
+  if (forceRefresh) {
+    const puzzle = await loadPuzzle();
+    semanticPuzzlePromises.delete(puzzle.id);
+    semanticPuzzlePromises.delete(`${puzzle.id}:force`);
+  }
+
+  const result = await getSemanticPuzzle({ forceRefresh });
+
+  if (forceRefresh) {
+    semanticPuzzlePromises.delete(result.puzzle.id);
+  }
+
+  return {
+    puzzleId: result.puzzle.id,
+    date: result.puzzle.date,
+    answer: result.puzzle.answer,
+    vocabularySize: result.semantic.vocabularySize,
+  };
 }
 
 async function scoreGuess(guess) {
@@ -1918,7 +2123,8 @@ async function scoreGuess(guess) {
 
   const { puzzle, semantic } = await getSemanticPuzzle();
 
-  const cachedGuess = guessScoreCache.get(normalizedGuess);
+  const guessCacheKey = `${puzzle.id}:${normalizedGuess}`;
+  const cachedGuess = guessScoreCache.get(guessCacheKey);
   if (cachedGuess) {
     return cachedGuess;
   }
@@ -1954,7 +2160,7 @@ async function scoreGuess(guess) {
     answer: normalizedGuess === puzzle.answer ? puzzle.answer : null,
   };
 
-  guessScoreCache.set(normalizedGuess, result);
+  guessScoreCache.set(guessCacheKey, result);
   return result;
 }
 
@@ -2164,6 +2370,45 @@ app.post("/api/session", async (req, res) => {
     });
   }
 });
+
+async function handleInternalPrecompute(req, res) {
+  try {
+    if (PRECOMPUTE_TRIGGER_TOKEN) {
+      const providedToken = String(
+        req.headers["x-precompute-token"] || req.body?.token || req.query?.token || ""
+      ).trim();
+
+      if (providedToken !== PRECOMPUTE_TRIGGER_TOKEN) {
+        res.status(401).json({
+          ok: false,
+          error: "Unauthorized precompute request.",
+        });
+        return;
+      }
+    }
+
+    const result = await precomputeTodayPuzzle({
+      forceRefresh:
+        String(req.body?.force || req.query?.force || "")
+          .trim()
+          .toLowerCase() === "true",
+    });
+
+    res.json({
+      ok: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("Failed to precompute today's puzzle:", error);
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to precompute puzzle.",
+    });
+  }
+}
+
+app.get("/internal/precompute", handleInternalPrecompute);
+app.post("/internal/precompute", handleInternalPrecompute);
 
 app.get("/api/puzzle", async (_req, res) => {
   try {
@@ -2544,6 +2789,16 @@ let server;
   server = app.listen(Number(PORT), () => {
     console.log(`Server listening on http://localhost:${PORT}`);
   });
+
+  precomputeTodayPuzzle()
+    .then((result) => {
+      console.log(
+        `Startup prewarm ready for puzzle ${result.puzzleId} (${result.answer}) with ${result.vocabularySize} ranked words.`
+      );
+    })
+    .catch((error) => {
+      console.error("Startup prewarm failed:", error);
+    });
 
   await client.login(DISCORD_BOT_TOKEN);
 })().catch((error) => {

@@ -107,7 +107,8 @@ The app reads its valid secret words from `data/generated/answers.json`.
 
 - keep this file committed so production and local stay in sync
 - the order matters if you want to use it as a day-by-day answer schedule
-- `data/puzzles/sample.json` can still point at a current test answer, but that answer must exist in `answers.json`
+- the daily puzzle is now derived from the current Los Angeles date plus the ordered answer list
+- for local testing, use `PUZZLE_DATE_OVERRIDE` and/or `PUZZLE_ANSWER_OVERRIDE`
 
 ## Turning this into a Discord Activity
 
