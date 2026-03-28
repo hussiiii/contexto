@@ -122,6 +122,24 @@ body.modal-open {
   letter-spacing: 0.08em;
 }
 
+.hero-title span {
+  display: inline-block;
+  animation: hero-title-wave 3.2s ease-in-out infinite;
+  will-change: transform;
+}
+
+.hero-title-close {
+  animation-delay: 0s;
+}
+
+.hero-title-mid {
+  animation-delay: 0.18s;
+}
+
+.hero-title-far {
+  animation-delay: 0.36s;
+}
+
 .hero-title-close {
   color: #19d8a0;
 }
@@ -132,6 +150,25 @@ body.modal-open {
 
 .hero-title-far {
   color: #ff5a83;
+}
+
+@keyframes hero-title-wave {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  25% {
+    transform: translateY(-4px);
+  }
+
+  50% {
+    transform: translateY(1px);
+  }
+
+  75% {
+    transform: translateY(-2px);
+  }
 }
 
 .hero-subtitle {
