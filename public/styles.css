@@ -122,6 +122,18 @@ body.modal-open {
   letter-spacing: 0.08em;
 }
 
+.hero-title-close {
+  color: #19d8a0;
+}
+
+.hero-title-mid {
+  color: #ffcb47;
+}
+
+.hero-title-far {
+  color: #ff5a83;
+}
+
 .hero-subtitle {
   margin: 0 0 18px;
   text-align: center;

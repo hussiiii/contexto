@@ -4,14 +4,16 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Contexto MVP</title>
-    <link rel="stylesheet" href="/styles.css?v=20260327-3" />
+    <link rel="stylesheet" href="/styles.css?v=20260328-1" />
   </head>
   <body>
     <main class="app-shell">
       <section id="home-screen" class="screen screen-active">
         <div class="hero-card">
           <p class="hero-date" id="hero-date">03/25/2026</p>
-          <h1 class="hero-title">Contexto</h1>
+          <h1 class="hero-title" aria-label="Contexto">
+            <span class="hero-title-close">Con</span><span class="hero-title-mid">tex</span><span class="hero-title-far">to</span>
+          </h1>
           <p class="hero-subtitle">Daily puzzle in Discord</p>
           <button id="play-today-button" class="primary-button" type="button">
             Play Today's Puzzle
@@ -191,6 +193,6 @@
       </section>
     </div>
 
-    <script type="module" src="/app.js?v=20260327-3"></script>
+    <script type="module" src="/app.js?v=20260328-1"></script>
   </body>
   </html>
