@@ -67,6 +67,22 @@ const answersFilePath = path.join(
   generatedDataDirectory,
   "answers.json"
 );
+const progressCardFontRegularPath = path.join(
+  projectRoot,
+  "node_modules",
+  "@fontsource",
+  "inter",
+  "files",
+  "inter-latin-400-normal.woff"
+);
+const progressCardFontBoldPath = path.join(
+  projectRoot,
+  "node_modules",
+  "@fontsource",
+  "inter",
+  "files",
+  "inter-latin-700-normal.woff"
+);
 const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
@@ -126,6 +142,7 @@ const client = new Client({
 const PLAY_BUTTON_ID = "contexto-play";
 const guessScoreCache = new Map();
 const avatarDataUriCache = new Map();
+let progressCardFontCssPromise;
 let semanticPuzzlePromise;
 let acceptedWordsPromise;
 let allowedAnswersPromise;
@@ -651,7 +668,35 @@ async function getAvatarDataUri(avatarUrl) {
   }
 }
 
-function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri }) {
+async function getProgressCardFontCss() {
+  if (!progressCardFontCssPromise) {
+    progressCardFontCssPromise = (async () => {
+      const [regularFont, boldFont] = await Promise.all([
+        fs.readFile(progressCardFontRegularPath),
+        fs.readFile(progressCardFontBoldPath),
+      ]);
+
+      return `
+        @font-face {
+          font-family: "ContextoCard";
+          src: url("data:font/woff;base64,${regularFont.toString("base64")}") format("woff");
+          font-weight: 400;
+          font-style: normal;
+        }
+        @font-face {
+          font-family: "ContextoCard";
+          src: url("data:font/woff;base64,${boldFont.toString("base64")}") format("woff");
+          font-weight: 700;
+          font-style: normal;
+        }
+      `;
+    })();
+  }
+
+  return progressCardFontCssPromise;
+}
+
+function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri, fontCss }) {
   const badgeColors =
     summary.status === "Solved"
       ? { fill: "#153b2d", stroke: "#1f9d68", text: "#58d69e" }
@@ -675,39 +720,42 @@ function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri }) {
           <circle cx="360" cy="198" r="110" />
         </clipPath>
       </defs>
+      <style>
+        ${fontCss}
+      </style>
       <rect width="720" height="920" rx="40" fill="#111114" />
       <rect x="24" y="24" width="672" height="872" rx="34" fill="#17171c" stroke="#2c2c33" stroke-width="2" />
 
-      <text x="360" y="60" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="#f4f4f5">Contexto</text>
-      <text x="360" y="92" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="20" fill="#9d9daa">${escapeXml(
+      <text x="360" y="60" text-anchor="middle" font-family="ContextoCard, sans-serif" font-size="24" font-weight="700" fill="#f4f4f5">Contexto</text>
+      <text x="360" y="92" text-anchor="middle" font-family="ContextoCard, sans-serif" font-size="20" fill="#9d9daa">${escapeXml(
         puzzle?.date || ""
       )}</text>
 
       ${avatarMarkup}
       <circle cx="360" cy="198" r="110" fill="none" stroke="#35353d" stroke-width="6" />
 
-      <text x="360" y="366" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="40" font-weight="700" fill="#f4f4f5">${escapeXml(
+      <text x="360" y="366" text-anchor="middle" font-family="ContextoCard, sans-serif" font-size="40" font-weight="700" fill="#f4f4f5">${escapeXml(
         player?.displayName || "Player"
       )}</text>
       <rect x="250" y="396" width="220" height="56" rx="28" fill="${badgeColors.fill}" stroke="${badgeColors.stroke}" stroke-width="2" />
-      <text x="360" y="432" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="${badgeColors.text}">${escapeXml(
+      <text x="360" y="432" text-anchor="middle" font-family="ContextoCard, sans-serif" font-size="24" font-weight="700" fill="${badgeColors.text}">${escapeXml(
         summary.status
       )}</text>
 
-      <text x="360" y="532" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="28" fill="#aeb0bc">Guesses ${summary.guessCount}   Hints ${summary.hintCount}</text>
+      <text x="360" y="532" text-anchor="middle" font-family="ContextoCard, sans-serif" font-size="28" fill="#aeb0bc">Guesses ${summary.guessCount}   Hints ${summary.hintCount}</text>
 
       <rect x="56" y="608" width="608" height="220" rx="28" fill="#101013" stroke="#2f3138" stroke-width="2" />
 
       <rect x="122" y="674" width="44" height="44" rx="12" fill="#14b87a" />
-      <text x="186" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.greenCount}</text>
+      <text x="186" y="706" font-family="ContextoCard, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.greenCount}</text>
 
       <rect x="338" y="674" width="44" height="44" rx="12" fill="#f8c44f" />
-      <text x="402" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.yellowCount}</text>
+      <text x="402" y="706" font-family="ContextoCard, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.yellowCount}</text>
 
       <rect x="554" y="674" width="44" height="44" rx="12" fill="#ff4d6d" />
-      <text x="618" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.redCount}</text>
+      <text x="618" y="706" font-family="ContextoCard, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.redCount}</text>
 
-      <text x="360" y="780" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="20" fill="#8f919d">Green 1-100   Yellow 101-500   Red 501+</text>
+      <text x="360" y="780" text-anchor="middle" font-family="ContextoCard, sans-serif" font-size="20" fill="#8f919d">Green 1-100   Yellow 101-500   Red 501+</text>
     </svg>
   `;
 }
@@ -715,11 +763,13 @@ function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri }) {
 async function renderProgressCardBuffer({ player, puzzle, progress }) {
   const summary = summarizePlayerProgress(progress);
   const avatarDataUri = await getAvatarDataUri(player?.avatarUrl);
+  const fontCss = await getProgressCardFontCss();
   const svg = buildProgressCardSvg({
     player,
     puzzle,
     summary,
     avatarDataUri,
+    fontCss,
   });
 
   return {
