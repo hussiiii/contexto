@@ -117,7 +117,8 @@ The recommended production setup is:
 
 - the main web service keeps the app, bot, and `/internal/precompute` endpoint
 - a separate Railway Function runs on a schedule and calls that endpoint
-- the function uses Los Angeles local-time checks so daylight saving time does not break your `00:01` rollover
+- the Railway cron itself runs once per day
+- daylight saving time is handled by manually updating the cron expression twice per year
 
 The repo includes a ready-to-push function at `railway/precompute-cron.ts`.
 
@@ -127,30 +128,40 @@ Set these on the Railway Function service:
 
 - `PRECOMPUTE_TARGET_URL`: full URL to your app endpoint, for example `https://your-app.up.railway.app/internal/precompute`
 - `PRECOMPUTE_TRIGGER_TOKEN`: must match the same token configured on the main app service
+- `PRECOMPUTE_SKIP_TIME_GATE`: set this to `true` for the once-daily cron setup so the function always triggers when Railway runs it
+- `PRECOMPUTE_FORCE_REFRESH`: optional, leave this `false` in production so the app reuses today's cache if it already exists
 - `PRECOMPUTE_TIMEZONE`: defaults to `America/Los_Angeles`
 - `PRECOMPUTE_LOCAL_HOUR`: defaults to `0`
 - `PRECOMPUTE_LOCAL_MINUTE`: defaults to `1`
-- `PRECOMPUTE_FORCE_REFRESH`: optional, set to `true` only if you want the function to force-regenerate even when today's cache already exists
+- `PRECOMPUTE_WINDOW_MINUTES`: defaults to `10`; allows a short delay after the target time so slightly late Railway starts still trigger
+
+When `PRECOMPUTE_SKIP_TIME_GATE=true`, the time-gate settings above are effectively ignored. It is fine to leave them in place.
 
 ### Recommended schedule
 
-Use this Railway cron schedule on the function:
+Use a once-daily Railway cron and update it when DST changes:
 
 ```text
-1 * * * *
+PDT: 1 7 * * *
+PST: 1 8 * * *
 ```
 
-That runs the function once per hour at minute `01`. The function itself only calls the app when the local Los Angeles time is `00:01`, which keeps the behavior correct across DST changes without needing seasonal cron edits.
+These are the UTC equivalents of `12:01 AM` Los Angeles:
+
+- `1 7 * * *` during `PDT`
+- `1 8 * * *` during `PST`
+
+With this setup, Railway is the source of truth for timing and the function should run with `PRECOMPUTE_SKIP_TIME_GATE=true`.
 
 ### Quick test mode
 
 For a fast integration test, you can temporarily switch the function to:
 
-- cron schedule: `* * * * *`
+- cron schedule: `*/5 * * * *`
 - `PRECOMPUTE_SKIP_TIME_GATE=true`
 - `PRECOMPUTE_FORCE_REFRESH=false`
 
-That makes the function call your app once per minute so you can verify:
+That makes the function call your app once every 5 minutes so you can verify:
 
 - the Railway Function is firing
 - the function can reach your app
@@ -158,8 +169,8 @@ That makes the function call your app once per minute so you can verify:
 
 When you're done testing, switch back to:
 
-- cron schedule: `1 * * * *`
-- `PRECOMPUTE_SKIP_TIME_GATE=false`
+- cron schedule: `1 7 * * *` during `PDT` or `1 8 * * *` during `PST`
+- `PRECOMPUTE_SKIP_TIME_GATE=true`
 
 ### CLI setup
 
@@ -173,7 +184,7 @@ When you're done testing, switch back to:
 2. Create the function service from this repo file:
 
    ```bash
-   railway functions new --path ./railway/precompute-cron.ts --name contexto-precompute --cron "1 * * * *"
+   railway functions new --path ./railway/precompute-cron.ts --name contexto-precompute --cron "1 7 * * *"
    ```
 
 3. In Railway, open the new function service and set the function env vars listed above.

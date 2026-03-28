@@ -3,6 +3,7 @@ const TRIGGER_TOKEN = (process.env.PRECOMPUTE_TRIGGER_TOKEN || "").trim();
 const TIMEZONE = (process.env.PRECOMPUTE_TIMEZONE || "America/Los_Angeles").trim();
 const LOCAL_HOUR = Number(process.env.PRECOMPUTE_LOCAL_HOUR || 0);
 const LOCAL_MINUTE = Number(process.env.PRECOMPUTE_LOCAL_MINUTE || 1);
+const WINDOW_MINUTES = Math.max(1, Number(process.env.PRECOMPUTE_WINDOW_MINUTES || 10));
 const SKIP_TIME_GATE =
   String(process.env.PRECOMPUTE_SKIP_TIME_GATE || "").trim().toLowerCase() === "true";
 const FORCE_REFRESH =
@@ -37,6 +38,10 @@ function getLocalTimeParts(date: Date, timeZone: string) {
   };
 }
 
+function getMinuteOfDay(hour: number, minute: number) {
+  return hour * 60 + minute;
+}
+
 async function main() {
   if (!TARGET_URL) {
     throw new Error("Missing PRECOMPUTE_TARGET_URL.");
@@ -48,10 +53,13 @@ async function main() {
     2,
     "0"
   )}:${String(parts.minute).padStart(2, "0")}:${String(parts.second).padStart(2, "0")}`;
+  const currentMinuteOfDay = getMinuteOfDay(parts.hour, parts.minute);
+  const targetMinuteOfDay = getMinuteOfDay(LOCAL_HOUR, LOCAL_MINUTE);
+  const minuteOffset = currentMinuteOfDay - targetMinuteOfDay;
 
-  if (!SKIP_TIME_GATE && (parts.hour !== LOCAL_HOUR || parts.minute !== LOCAL_MINUTE)) {
+  if (!SKIP_TIME_GATE && (minuteOffset < 0 || minuteOffset >= WINDOW_MINUTES)) {
     console.log(
-      `Skipping precompute at ${localTimestamp} ${TIMEZONE}; waiting for ${String(
+      `Skipping precompute at ${localTimestamp} ${TIMEZONE}; outside ${WINDOW_MINUTES}-minute window after ${String(
         LOCAL_HOUR
       ).padStart(2, "0")}:${String(LOCAL_MINUTE).padStart(2, "0")}.`
     );
@@ -60,6 +68,12 @@ async function main() {
 
   if (SKIP_TIME_GATE) {
     console.log(`Time gate bypass enabled. Triggering precompute at ${localTimestamp} ${TIMEZONE}.`);
+  } else {
+    console.log(
+      `Within ${WINDOW_MINUTES}-minute window after ${String(LOCAL_HOUR).padStart(2, "0")}:${String(
+        LOCAL_MINUTE
+      ).padStart(2, "0")} in ${TIMEZONE}. Triggering precompute at ${localTimestamp}.`
+    );
   }
 
   const url = new URL(TARGET_URL);
