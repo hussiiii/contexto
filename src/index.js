@@ -660,56 +660,54 @@ function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri }) {
         : { fill: "#232a4a", stroke: "#6f8cff", text: "#b4c0ff" };
 
   const avatarMarkup = avatarDataUri
-    ? `<image href="${avatarDataUri}" x="54" y="70" width="128" height="128" clip-path="url(#avatar-clip)" preserveAspectRatio="xMidYMid slice" />`
+    ? `<image href="${avatarDataUri}" x="250" y="88" width="220" height="220" clip-path="url(#avatar-clip)" preserveAspectRatio="xMidYMid slice" />`
     : `
-      <circle cx="118" cy="134" r="64" fill="#2b2b34" />
-      <text x="118" y="148" text-anchor="middle" font-size="42" font-weight="700" fill="#f4f4f5">${escapeXml(
+      <circle cx="360" cy="198" r="110" fill="#2b2b34" />
+      <text x="360" y="220" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="74" font-weight="700" fill="#f4f4f5">${escapeXml(
         getPlayerInitials(player)
       )}</text>
     `;
 
   return `
-    <svg width="960" height="360" viewBox="0 0 960 360" xmlns="http://www.w3.org/2000/svg">
+    <svg width="720" height="920" viewBox="0 0 720 920" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <clipPath id="avatar-clip">
-          <circle cx="118" cy="134" r="64" />
+          <circle cx="360" cy="198" r="110" />
         </clipPath>
       </defs>
-      <rect width="960" height="360" rx="28" fill="#121215" />
-      <rect x="18" y="18" width="924" height="324" rx="24" fill="#17171c" stroke="#2c2c33" stroke-width="2" />
-      <text x="54" y="48" font-size="20" font-weight="700" fill="#e6e6eb">Contexto</text>
-      <text x="165" y="48" font-size="20" fill="#a8a8b3">${escapeXml(puzzle?.date || "")}</text>
+      <rect width="720" height="920" rx="40" fill="#111114" />
+      <rect x="24" y="24" width="672" height="872" rx="34" fill="#17171c" stroke="#2c2c33" stroke-width="2" />
+
+      <text x="360" y="60" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="#f4f4f5">Contexto</text>
+      <text x="360" y="92" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="20" fill="#9d9daa">${escapeXml(
+        puzzle?.date || ""
+      )}</text>
 
       ${avatarMarkup}
-      <circle cx="118" cy="134" r="64" fill="none" stroke="#35353d" stroke-width="4" />
+      <circle cx="360" cy="198" r="110" fill="none" stroke="#35353d" stroke-width="6" />
 
-      <text x="214" y="106" font-size="34" font-weight="700" fill="#f4f4f5">${escapeXml(
+      <text x="360" y="366" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="40" font-weight="700" fill="#f4f4f5">${escapeXml(
         player?.displayName || "Player"
       )}</text>
-      <rect x="214" y="124" width="148" height="40" rx="20" fill="${badgeColors.fill}" stroke="${badgeColors.stroke}" />
-      <text x="288" y="150" text-anchor="middle" font-size="20" font-weight="700" fill="${badgeColors.text}">${escapeXml(
+      <rect x="250" y="396" width="220" height="56" rx="28" fill="${badgeColors.fill}" stroke="${badgeColors.stroke}" stroke-width="2" />
+      <text x="360" y="432" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="${badgeColors.text}">${escapeXml(
         summary.status
       )}</text>
 
-      <text x="214" y="205" font-size="18" fill="#9d9daa">Guesses</text>
-      <text x="214" y="250" font-size="46" font-weight="700" fill="#ffffff">${summary.guessCount}</text>
+      <text x="360" y="532" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="28" fill="#aeb0bc">Guesses ${summary.guessCount}   Hints ${summary.hintCount}</text>
 
-      <text x="386" y="205" font-size="18" fill="#9d9daa">Hints Used</text>
-      <text x="386" y="250" font-size="46" font-weight="700" fill="#ffffff">${summary.hintCount}</text>
+      <rect x="56" y="608" width="608" height="220" rx="28" fill="#101013" stroke="#2f3138" stroke-width="2" />
 
-      <rect x="560" y="92" width="330" height="196" rx="22" fill="#101013" stroke="#303039" />
+      <rect x="122" y="674" width="44" height="44" rx="12" fill="#14b87a" />
+      <text x="186" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.greenCount}</text>
 
-      <rect x="598" y="132" width="28" height="28" rx="8" fill="#14b87a" />
-      <text x="646" y="153" font-size="24" font-weight="700" fill="#ffffff">${summary.greenCount}</text>
-      <text x="690" y="153" font-size="18" fill="#9d9daa">Top 100</text>
+      <rect x="338" y="674" width="44" height="44" rx="12" fill="#f8c44f" />
+      <text x="402" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.yellowCount}</text>
 
-      <rect x="598" y="178" width="28" height="28" rx="8" fill="#f57c2c" />
-      <text x="646" y="199" font-size="24" font-weight="700" fill="#ffffff">${summary.yellowCount}</text>
-      <text x="690" y="199" font-size="18" fill="#9d9daa">101-500</text>
+      <rect x="554" y="674" width="44" height="44" rx="12" fill="#ff4d6d" />
+      <text x="618" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.redCount}</text>
 
-      <rect x="598" y="224" width="28" height="28" rx="8" fill="#ff2f92" />
-      <text x="646" y="245" font-size="24" font-weight="700" fill="#ffffff">${summary.redCount}</text>
-      <text x="690" y="245" font-size="18" fill="#9d9daa">501+</text>
+      <text x="360" y="780" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="20" fill="#8f919d">Green 1-100   Yellow 101-500   Red 501+</text>
     </svg>
   `;
 }
@@ -730,12 +728,8 @@ async function renderProgressCardBuffer({ player, puzzle, progress }) {
   };
 }
 
-function buildProgressMessageContent({ player, summary }) {
-  return [
-    `${player.displayName} • ${summary.status}`,
-    `Guesses: ${summary.guessCount} • Hints: ${summary.hintCount}`,
-    `🟩 ${summary.greenCount}  🟨 ${summary.yellowCount}  🟥 ${summary.redCount}`,
-  ].join("\n");
+function buildProgressMessageContent({ player }) {
+  return `${player.displayName} was playing Contexto`;
 }
 
 async function loadProgressMessageRecord({ userId, puzzleId, channelId }) {
