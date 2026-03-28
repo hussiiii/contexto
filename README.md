@@ -45,7 +45,7 @@ Minimal starter for a Discord-based Contexto prototype:
 
 5. Open `http://localhost:3000`
 
-On the first run, the server will call the embeddings API to build a cached ranking set for the current puzzle answer. Later runs reuse the generated cache in `data/generated`.
+On startup, the server prewarms the current day's semantic cache. In production, the app can also be triggered by a Railway cron function so players do not need to wait for the first guess of the day.
 
 ## Required Discord values
 
@@ -68,7 +68,7 @@ Use:
 /contexto-post
 ```
 
-- `/contexto-post`: post a text-channel prompt with a `Play Contexto` button
+- `/contexto-post`: post a text-channel prompt with a `Play now!` button
 
 `/contexto-post` supports an optional channel override.
 
@@ -97,6 +97,7 @@ This keeps the game shared and deterministic while still allowing much broader u
 - common low-information stop words such as `the`, `and`, `but`, etc. are filtered out
 - puzzle answers must come from the ordered answer list in `data/generated/answers.json`
 - guess validation uses the full `popular-english-words` list, plus everything in `answers.json`
+- each day's ranked semantic cache is persisted in Postgres
 - ranking uses an adjusted score:
   - semantic similarity from embeddings
   - minus lexical penalties for edit-distance, substring, and character-overlap traps
@@ -109,6 +110,81 @@ The app reads its valid secret words from `data/generated/answers.json`.
 - the order matters if you want to use it as a day-by-day answer schedule
 - the daily puzzle is now derived from the current Los Angeles date plus the ordered answer list
 - for local testing, use `PUZZLE_DATE_OVERRIDE` and/or `PUZZLE_ANSWER_OVERRIDE`
+
+## Railway Cron Function
+
+The recommended production setup is:
+
+- the main web service keeps the app, bot, and `/internal/precompute` endpoint
+- a separate Railway Function runs on a schedule and calls that endpoint
+- the function uses Los Angeles local-time checks so daylight saving time does not break your `00:01` rollover
+
+The repo includes a ready-to-push function at `railway/precompute-cron.ts`.
+
+### Function env vars
+
+Set these on the Railway Function service:
+
+- `PRECOMPUTE_TARGET_URL`: full URL to your app endpoint, for example `https://your-app.up.railway.app/internal/precompute`
+- `PRECOMPUTE_TRIGGER_TOKEN`: must match the same token configured on the main app service
+- `PRECOMPUTE_TIMEZONE`: defaults to `America/Los_Angeles`
+- `PRECOMPUTE_LOCAL_HOUR`: defaults to `0`
+- `PRECOMPUTE_LOCAL_MINUTE`: defaults to `1`
+- `PRECOMPUTE_FORCE_REFRESH`: optional, set to `true` only if you want the function to force-regenerate even when today's cache already exists
+
+### Recommended schedule
+
+Use this Railway cron schedule on the function:
+
+```text
+1 * * * *
+```
+
+That runs the function once per hour at minute `01`. The function itself only calls the app when the local Los Angeles time is `00:01`, which keeps the behavior correct across DST changes without needing seasonal cron edits.
+
+### Quick test mode
+
+For a fast integration test, you can temporarily switch the function to:
+
+- cron schedule: `* * * * *`
+- `PRECOMPUTE_SKIP_TIME_GATE=true`
+- `PRECOMPUTE_FORCE_REFRESH=false`
+
+That makes the function call your app once per minute so you can verify:
+
+- the Railway Function is firing
+- the function can reach your app
+- your app accepts the token and returns a success response
+
+When you're done testing, switch back to:
+
+- cron schedule: `1 * * * *`
+- `PRECOMPUTE_SKIP_TIME_GATE=false`
+
+### CLI setup
+
+1. Log into Railway and link your project:
+
+   ```bash
+   railway login
+   railway link
+   ```
+
+2. Create the function service from this repo file:
+
+   ```bash
+   railway functions new --path ./railway/precompute-cron.ts --name contexto-precompute --cron "1 * * * *"
+   ```
+
+3. In Railway, open the new function service and set the function env vars listed above.
+
+4. Push the latest function code:
+
+   ```bash
+   railway functions push --path ./railway/precompute-cron.ts
+   ```
+
+5. Keep the main app service `PRECOMPUTE_TRIGGER_TOKEN` set too, since the app endpoint validates it.
 
 ## Turning this into a Discord Activity
 
