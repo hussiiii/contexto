@@ -915,7 +915,6 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
               alignItems: "flex-end",
               justifyContent: "center",
               gap: 10,
-              paddingBottom: 10,
             },
           },
           h(
