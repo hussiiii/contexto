@@ -93,6 +93,7 @@ const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
 const APP_SESSION_TTL_DAYS = 30;
 const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
+const CONTEXTO_EPOCH_DATE = "2026-03-25";
 
 const openai = OPENAI_API_KEY
   ? new OpenAI({
@@ -591,6 +592,24 @@ function getGuessTone(rank) {
   return "red";
 }
 
+function getContextoNumber(puzzle) {
+  const puzzleId = normalizeOptionalText(puzzle?.id, 40);
+
+  if (!puzzleId) {
+    return null;
+  }
+
+  const epoch = new Date(`${CONTEXTO_EPOCH_DATE}T00:00:00Z`);
+  const current = new Date(`${puzzleId}T00:00:00Z`);
+
+  if (Number.isNaN(epoch.getTime()) || Number.isNaN(current.getTime())) {
+    return null;
+  }
+
+  const dayOffset = Math.round((current.getTime() - epoch.getTime()) / 86400000);
+  return dayOffset + 1;
+}
+
 function summarizePlayerProgress(progress) {
   const normalizedProgress = progress || createEmptyProgressState();
   const guesses = normalizeStoredGuesses(normalizedProgress.guesses);
@@ -735,6 +754,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
   const h = React.createElement;
   const badge = getProgressBadgeConfig(summary.status);
   const segments = getProgressBarSegments(summary);
+  const contextoNumber = getContextoNumber(puzzle);
   const avatarNode = avatarDataUri
     ? h("img", {
         src: avatarDataUri,
@@ -806,7 +826,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             letterSpacing: -1,
           },
         },
-        "Contexto"
+        contextoNumber ? `Contexto #${contextoNumber}` : "Contexto"
       ),
       h(
         "div",
@@ -1963,7 +1983,7 @@ function createPlayMessageComponents() {
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId(PLAY_BUTTON_ID)
-        .setLabel("Play Contexto")
+        .setLabel("Play now!")
         .setStyle(ButtonStyle.Primary)
     ),
   ];
