@@ -855,14 +855,15 @@ function getProgressBadgeConfig(status) {
 }
 
 function renderProgressBadgeIcon(h, badge) {
+  const iconSize = badge.icon === "spiral" ? 28 : 22;
   const commonSvgProps = {
-    width: 22,
-    height: 22,
+    width: iconSize,
+    height: iconSize,
     viewBox: "0 0 24 24",
     style: {
       display: "flex",
-      width: 22,
-      height: 22,
+      width: iconSize,
+      height: iconSize,
     },
   };
 
