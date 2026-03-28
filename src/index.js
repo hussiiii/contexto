@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import dotenv from "dotenv";
 import express from "express";
 import { Resvg } from "@resvg/resvg-js";
+import React from "react";
 import {
   ActionRowBuilder,
   AttachmentBuilder,
@@ -24,7 +25,6 @@ import OpenAI from "openai";
 import { Pool } from "pg";
 import { words as popularWords } from "popular-english-words";
 import satori from "satori";
-import { html } from "satori-html";
 
 dotenv.config();
 
@@ -686,76 +686,259 @@ async function getProgressCardFonts() {
   return progressCardFontsPromise;
 }
 
+function getProgressBadgeConfig(status) {
+  if (status === "Solved") {
+    return {
+      label: "✓ Solved",
+      fill: "#143924",
+      border: "#23c16b",
+      text: "#84f0b2",
+    };
+  }
+
+  if (status === "Gave up") {
+    return {
+      label: "✕ Gave Up",
+      fill: "#431d27",
+      border: "#ff5f7a",
+      text: "#ffb2bf",
+    };
+  }
+
+  return {
+    label: "• Attempted",
+    fill: "#4a3e17",
+    border: "#f8c44f",
+    text: "#ffe08a",
+  };
+}
+
+function getProgressSquaresCount(count) {
+  if (count <= 0) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(count / 5));
+}
+
+function buildToneRow({ color, count }) {
+  const h = React.createElement;
+  const squareCount = getProgressSquaresCount(count);
+  const squares = Array.from({ length: squareCount }, (_value, index) =>
+    h("div", {
+      key: `square-${index}`,
+      style: {
+        display: "flex",
+        width: 30,
+        height: 30,
+        borderRadius: 9,
+        background: color,
+      },
+    })
+  );
+
+  return h(
+    "div",
+    {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 14,
+      },
+    },
+    h(
+      "div",
+      {
+        style: {
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 10,
+          minWidth: 170,
+        },
+      },
+      ...squares
+    ),
+    h(
+      "div",
+      {
+        style: {
+          display: "flex",
+          fontSize: 34,
+          fontWeight: 700,
+          color: "#ffffff",
+          minWidth: 50,
+        },
+      },
+      String(count)
+    )
+  );
+}
+
 function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
-  const badgeColors =
-    summary.status === "Solved"
-      ? { fill: "#153b2d", border: "#1f9d68", text: "#58d69e" }
-      : summary.status === "Gave up"
-        ? { fill: "#3d1f29", border: "#ff6b8c", text: "#ff9eb3" }
-        : { fill: "#232a4a", border: "#6f8cff", text: "#b4c0ff" };
-
+  const h = React.createElement;
+  const badge = getProgressBadgeConfig(summary.status);
   const avatarNode = avatarDataUri
-    ? html`<img
-        src="${avatarDataUri}"
-        width="220"
-        height="220"
-        style="width:220px;height:220px;border-radius:9999px;border:6px solid #35353d;"
-      />`
-    : html`<div
-        style="width:220px;height:220px;border-radius:9999px;border:6px solid #35353d;background:#2b2b34;color:#f4f4f5;display:flex;align-items:center;justify-content:center;font-size:74px;font-weight:700;"
-      >
-        ${getPlayerInitials(player)}
-      </div>`;
+    ? h("img", {
+        src: avatarDataUri,
+        width: 220,
+        height: 220,
+        style: {
+          width: 220,
+          height: 220,
+          borderRadius: 9999,
+          border: "6px solid #35353d",
+        },
+      })
+    : h(
+        "div",
+        {
+          style: {
+            width: 220,
+            height: 220,
+            borderRadius: 9999,
+            border: "6px solid #35353d",
+            background: "#2b2b34",
+            color: "#f4f4f5",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 74,
+            fontWeight: 700,
+          },
+        },
+        getPlayerInitials(player)
+      );
 
-  return html`
-    <div
-      style="width:720px;height:920px;display:flex;background:#111114;border-radius:40px;padding:24px;color:#f4f4f5;"
-    >
-      <div
-        style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;border:2px solid #2c2c33;border-radius:34px;background:#17171c;padding:40px 32px;"
-      >
-        <div style="display:flex;font-size:24px;font-weight:700;">Contexto</div>
-        <div style="display:flex;font-size:20px;color:#9d9daa;margin-top:8px;">${puzzle?.date || ""}</div>
-
-        <div style="display:flex;margin-top:28px;">${avatarNode}</div>
-
-        <div
-          style="display:flex;margin-top:28px;padding:14px 32px;border-radius:9999px;background:${badgeColors.fill};border:2px solid ${badgeColors.border};color:${badgeColors.text};font-size:24px;font-weight:700;"
-        >
-          ${summary.status}
-        </div>
-
-        <div style="display:flex;margin-top:32px;font-size:28px;color:#d8d9df;">
-          ${summary.guessCount} guesses • ${summary.hintCount} hints
-        </div>
-
-        <div
-          style="margin-top:72px;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#101013;border:2px solid #2f3138;border-radius:28px;padding:36px 28px;"
-        >
-          <div style="display:flex;align-items:center;justify-content:center;gap:56px;">
-            <div style="display:flex;align-items:center;gap:16px;">
-              <div style="display:flex;width:44px;height:44px;border-radius:12px;background:#14b87a;"></div>
-              <div style="display:flex;font-size:36px;font-weight:700;color:#ffffff;">${summary.greenCount}</div>
-            </div>
-
-            <div style="display:flex;align-items:center;gap:16px;">
-              <div style="display:flex;width:44px;height:44px;border-radius:12px;background:#f8c44f;"></div>
-              <div style="display:flex;font-size:36px;font-weight:700;color:#ffffff;">${summary.yellowCount}</div>
-            </div>
-
-            <div style="display:flex;align-items:center;gap:16px;">
-              <div style="display:flex;width:44px;height:44px;border-radius:12px;background:#ff4d6d;"></div>
-              <div style="display:flex;font-size:36px;font-weight:700;color:#ffffff;">${summary.redCount}</div>
-            </div>
-          </div>
-
-          <div style="display:flex;margin-top:28px;font-size:20px;color:#8f919d;">
-            Green 1-100 • Yellow 101-500 • Red 501+
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
+  return h(
+    "div",
+    {
+      style: {
+        width: 720,
+        height: 920,
+        display: "flex",
+        background: "#111114",
+        borderRadius: 40,
+        padding: 24,
+        color: "#f4f4f5",
+      },
+    },
+    h(
+      "div",
+      {
+        style: {
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          border: "2px solid #2c2c33",
+          borderRadius: 34,
+          background: "#17171c",
+          padding: "38px 36px 42px",
+        },
+      },
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            fontSize: 52,
+            fontWeight: 700,
+            lineHeight: 1,
+            letterSpacing: -1,
+          },
+        },
+        "Contexto"
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            marginTop: 14,
+            fontSize: 28,
+            color: "#b7b9c5",
+          },
+        },
+        puzzle?.date || ""
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            marginTop: 34,
+          },
+        },
+        avatarNode
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            marginTop: 22,
+            fontSize: 34,
+            fontWeight: 700,
+            color: "#f5f6fa",
+          },
+        },
+        player?.displayName || "Player"
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            marginTop: 24,
+            padding: "14px 30px",
+            borderRadius: 9999,
+            background: badge.fill,
+            border: `2px solid ${badge.border}`,
+            color: badge.text,
+            fontSize: 26,
+            fontWeight: 700,
+          },
+        },
+        badge.label
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            marginTop: 30,
+            fontSize: 30,
+            color: "#d8d9df",
+          },
+        },
+        `${summary.guessCount} guesses • ${summary.hintCount} hints`
+      ),
+      h(
+        "div",
+        {
+          style: {
+            marginTop: 56,
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            background: "#101013",
+            border: "2px solid #2f3138",
+            borderRadius: 28,
+            padding: "34px 32px",
+            gap: 24,
+          },
+        },
+        buildToneRow({ color: "#14b87a", count: summary.greenCount }),
+        buildToneRow({ color: "#f8c44f", count: summary.yellowCount }),
+        buildToneRow({ color: "#ff4d6d", count: summary.redCount })
+      )
+    )
+  );
 }
 
 async function renderProgressCardBuffer({ player, puzzle, progress }) {
