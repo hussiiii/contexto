@@ -9,12 +9,16 @@
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.4.1",
+    "@fontsource/inter": "^5.2.8",
+    "@resvg/resvg-js": "^2.6.2",
     "discord.js": "^14.19.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "openai": "^6.33.0",
     "pg": "^8.20.0",
     "popular-english-words": "^1.0.2",
-    "sharp": "^0.34.5"
+    "react": "^19.2.4",
+    "satori": "^0.26.0",
+    "satori-html": "^0.3.2"
   }
 }

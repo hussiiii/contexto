@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
 import express from "express";
+import { Resvg } from "@resvg/resvg-js";
 import {
   ActionRowBuilder,
   AttachmentBuilder,
@@ -22,7 +23,8 @@ import {
 import OpenAI from "openai";
 import { Pool } from "pg";
 import { words as popularWords } from "popular-english-words";
-import sharp from "sharp";
+import satori from "satori";
+import { html } from "satori-html";
 
 dotenv.config();
 
@@ -57,7 +59,6 @@ if (missingEnvVars.length > 0) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, "..");
-const fontConfigFilePath = path.join(projectRoot, "fonts.conf");
 const puzzleFilePath = path.join(projectRoot, "data", "puzzles", "sample.json");
 const generatedDataDirectory = path.join(projectRoot, "data", "generated");
 const semanticCacheFilePath = path.join(
@@ -68,6 +69,22 @@ const answersFilePath = path.join(
   generatedDataDirectory,
   "answers.json"
 );
+const progressCardFontRegularPath = path.join(
+  projectRoot,
+  "node_modules",
+  "@fontsource",
+  "inter",
+  "files",
+  "inter-latin-400-normal.woff"
+);
+const progressCardFontBoldPath = path.join(
+  projectRoot,
+  "node_modules",
+  "@fontsource",
+  "inter",
+  "files",
+  "inter-latin-700-normal.woff"
+);
 const OPENAI_EMBEDDING_MODEL =
   process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
 const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
@@ -76,9 +93,6 @@ const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
 const APP_SESSION_TTL_DAYS = 30;
 const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
-
-process.env.FONTCONFIG_PATH = projectRoot;
-process.env.FONTCONFIG_FILE = fontConfigFilePath;
 
 const openai = OPENAI_API_KEY
   ? new OpenAI({
@@ -131,6 +145,7 @@ const client = new Client({
 const PLAY_BUTTON_ID = "contexto-play";
 const guessScoreCache = new Map();
 const avatarDataUriCache = new Map();
+let progressCardFontsPromise;
 let semanticPuzzlePromise;
 let acceptedWordsPromise;
 let allowedAnswersPromise;
@@ -606,15 +621,6 @@ function summarizePlayerProgress(progress) {
   };
 }
 
-function escapeXml(value) {
-  return String(value || "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
-}
-
 function getPlayerInitials(player) {
   const source = String(player?.displayName || "Player").trim();
   const parts = source.split(/\s+/).filter(Boolean).slice(0, 2);
@@ -656,80 +662,127 @@ async function getAvatarDataUri(avatarUrl) {
   }
 }
 
-function buildProgressCardSvg({ player, puzzle, summary, avatarDataUri }) {
+async function getProgressCardFonts() {
+  if (!progressCardFontsPromise) {
+    progressCardFontsPromise = Promise.all([
+      fs.readFile(progressCardFontRegularPath),
+      fs.readFile(progressCardFontBoldPath),
+    ]).then(([regularFont, boldFont]) => [
+      {
+        name: "Inter",
+        data: regularFont,
+        weight: 400,
+        style: "normal",
+      },
+      {
+        name: "Inter",
+        data: boldFont,
+        weight: 700,
+        style: "normal",
+      },
+    ]);
+  }
+
+  return progressCardFontsPromise;
+}
+
+function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
   const badgeColors =
     summary.status === "Solved"
-      ? { fill: "#153b2d", stroke: "#1f9d68", text: "#58d69e" }
+      ? { fill: "#153b2d", border: "#1f9d68", text: "#58d69e" }
       : summary.status === "Gave up"
-        ? { fill: "#3d1f29", stroke: "#ff6b8c", text: "#ff9eb3" }
-        : { fill: "#232a4a", stroke: "#6f8cff", text: "#b4c0ff" };
+        ? { fill: "#3d1f29", border: "#ff6b8c", text: "#ff9eb3" }
+        : { fill: "#232a4a", border: "#6f8cff", text: "#b4c0ff" };
 
-  const avatarMarkup = avatarDataUri
-    ? `<image href="${avatarDataUri}" x="250" y="88" width="220" height="220" clip-path="url(#avatar-clip)" preserveAspectRatio="xMidYMid slice" />`
-    : `
-      <circle cx="360" cy="198" r="110" fill="#2b2b34" />
-      <text x="360" y="220" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="74" font-weight="700" fill="#f4f4f5">${escapeXml(
-        getPlayerInitials(player)
-      )}</text>
-    `;
+  const avatarNode = avatarDataUri
+    ? html`<img
+        src="${avatarDataUri}"
+        width="220"
+        height="220"
+        style="width:220px;height:220px;border-radius:9999px;border:6px solid #35353d;"
+      />`
+    : html`<div
+        style="width:220px;height:220px;border-radius:9999px;border:6px solid #35353d;background:#2b2b34;color:#f4f4f5;display:flex;align-items:center;justify-content:center;font-size:74px;font-weight:700;"
+      >
+        ${getPlayerInitials(player)}
+      </div>`;
 
-  return `
-    <svg width="720" height="920" viewBox="0 0 720 920" xmlns="http://www.w3.org/2000/svg">
-      <defs>
-        <clipPath id="avatar-clip">
-          <circle cx="360" cy="198" r="110" />
-        </clipPath>
-      </defs>
-      <rect width="720" height="920" rx="40" fill="#111114" />
-      <rect x="24" y="24" width="672" height="872" rx="34" fill="#17171c" stroke="#2c2c33" stroke-width="2" />
+  return html`
+    <div
+      style="width:720px;height:920px;display:flex;background:#111114;border-radius:40px;padding:24px;color:#f4f4f5;"
+    >
+      <div
+        style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;border:2px solid #2c2c33;border-radius:34px;background:#17171c;padding:40px 32px;"
+      >
+        <div style="font-size:24px;font-weight:700;">Contexto</div>
+        <div style="font-size:20px;color:#9d9daa;margin-top:8px;">${puzzle?.date || ""}</div>
 
-      <text x="360" y="60" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="#f4f4f5">Contexto</text>
-      <text x="360" y="92" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="20" fill="#9d9daa">${escapeXml(
-        puzzle?.date || ""
-      )}</text>
+        <div style="margin-top:28px;">${avatarNode}</div>
 
-      ${avatarMarkup}
-      <circle cx="360" cy="198" r="110" fill="none" stroke="#35353d" stroke-width="6" />
+        <div
+          style="margin-top:28px;padding:14px 32px;border-radius:9999px;background:${badgeColors.fill};border:2px solid ${badgeColors.border};color:${badgeColors.text};font-size:24px;font-weight:700;"
+        >
+          ${summary.status}
+        </div>
 
-      <text x="360" y="366" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="40" font-weight="700" fill="#f4f4f5">${escapeXml(
-        player?.displayName || "Player"
-      )}</text>
-      <rect x="250" y="396" width="220" height="56" rx="28" fill="${badgeColors.fill}" stroke="${badgeColors.stroke}" stroke-width="2" />
-      <text x="360" y="432" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="24" font-weight="700" fill="${badgeColors.text}">${escapeXml(
-        summary.status
-      )}</text>
+        <div style="margin-top:32px;font-size:28px;color:#d8d9df;">
+          ${summary.guessCount} guesses • ${summary.hintCount} hints
+        </div>
 
-      <text x="360" y="532" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="28" fill="#aeb0bc">Guesses ${summary.guessCount}   Hints ${summary.hintCount}</text>
+        <div
+          style="margin-top:72px;width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#101013;border:2px solid #2f3138;border-radius:28px;padding:36px 28px;"
+        >
+          <div style="display:flex;align-items:center;justify-content:center;gap:56px;">
+            <div style="display:flex;align-items:center;gap:16px;">
+              <div style="width:44px;height:44px;border-radius:12px;background:#14b87a;"></div>
+              <div style="font-size:36px;font-weight:700;color:#ffffff;">${summary.greenCount}</div>
+            </div>
 
-      <rect x="56" y="608" width="608" height="220" rx="28" fill="#101013" stroke="#2f3138" stroke-width="2" />
+            <div style="display:flex;align-items:center;gap:16px;">
+              <div style="width:44px;height:44px;border-radius:12px;background:#f8c44f;"></div>
+              <div style="font-size:36px;font-weight:700;color:#ffffff;">${summary.yellowCount}</div>
+            </div>
 
-      <rect x="122" y="674" width="44" height="44" rx="12" fill="#14b87a" />
-      <text x="186" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.greenCount}</text>
+            <div style="display:flex;align-items:center;gap:16px;">
+              <div style="width:44px;height:44px;border-radius:12px;background:#ff4d6d;"></div>
+              <div style="font-size:36px;font-weight:700;color:#ffffff;">${summary.redCount}</div>
+            </div>
+          </div>
 
-      <rect x="338" y="674" width="44" height="44" rx="12" fill="#f8c44f" />
-      <text x="402" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.yellowCount}</text>
-
-      <rect x="554" y="674" width="44" height="44" rx="12" fill="#ff4d6d" />
-      <text x="618" y="706" font-family="DejaVu Sans, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">${summary.redCount}</text>
-
-      <text x="360" y="780" text-anchor="middle" font-family="DejaVu Sans, Arial, sans-serif" font-size="20" fill="#8f919d">Green 1-100   Yellow 101-500   Red 501+</text>
-    </svg>
+          <div style="margin-top:28px;font-size:20px;color:#8f919d;">
+            Green 1-100 • Yellow 101-500 • Red 501+
+          </div>
+        </div>
+      </div>
+    </div>
   `;
 }
 
 async function renderProgressCardBuffer({ player, puzzle, progress }) {
   const summary = summarizePlayerProgress(progress);
   const avatarDataUri = await getAvatarDataUri(player?.avatarUrl);
-  const svg = buildProgressCardSvg({
+  const fonts = await getProgressCardFonts();
+  const markup = buildProgressCardMarkup({
     player,
     puzzle,
     summary,
     avatarDataUri,
   });
+  const svg = await satori(markup, {
+    width: 720,
+    height: 920,
+    fonts,
+  });
+  const resvg = new Resvg(svg, {
+    fitTo: {
+      mode: "width",
+      value: 720,
+    },
+  });
 
   return {
     summary,
-    buffer: await sharp(Buffer.from(svg)).png().toBuffer(),
+    buffer: resvg.render().asPng(),
   };
 }
 
