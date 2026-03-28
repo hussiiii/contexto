@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.4.1",
-    "@fontsource/inter": "^5.2.8",
     "discord.js": "^14.19.3",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
