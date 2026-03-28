@@ -714,18 +714,18 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
       <div
         style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;border:2px solid #2c2c33;border-radius:34px;background:#17171c;padding:40px 32px;"
       >
-        <div style="font-size:24px;font-weight:700;">Contexto</div>
-        <div style="font-size:20px;color:#9d9daa;margin-top:8px;">${puzzle?.date || ""}</div>
+        <div style="display:flex;font-size:24px;font-weight:700;">Contexto</div>
+        <div style="display:flex;font-size:20px;color:#9d9daa;margin-top:8px;">${puzzle?.date || ""}</div>
 
-        <div style="margin-top:28px;">${avatarNode}</div>
+        <div style="display:flex;margin-top:28px;">${avatarNode}</div>
 
         <div
-          style="margin-top:28px;padding:14px 32px;border-radius:9999px;background:${badgeColors.fill};border:2px solid ${badgeColors.border};color:${badgeColors.text};font-size:24px;font-weight:700;"
+          style="display:flex;margin-top:28px;padding:14px 32px;border-radius:9999px;background:${badgeColors.fill};border:2px solid ${badgeColors.border};color:${badgeColors.text};font-size:24px;font-weight:700;"
         >
           ${summary.status}
         </div>
 
-        <div style="margin-top:32px;font-size:28px;color:#d8d9df;">
+        <div style="display:flex;margin-top:32px;font-size:28px;color:#d8d9df;">
           ${summary.guessCount} guesses • ${summary.hintCount} hints
         </div>
 
@@ -734,22 +734,22 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
         >
           <div style="display:flex;align-items:center;justify-content:center;gap:56px;">
             <div style="display:flex;align-items:center;gap:16px;">
-              <div style="width:44px;height:44px;border-radius:12px;background:#14b87a;"></div>
-              <div style="font-size:36px;font-weight:700;color:#ffffff;">${summary.greenCount}</div>
+              <div style="display:flex;width:44px;height:44px;border-radius:12px;background:#14b87a;"></div>
+              <div style="display:flex;font-size:36px;font-weight:700;color:#ffffff;">${summary.greenCount}</div>
             </div>
 
             <div style="display:flex;align-items:center;gap:16px;">
-              <div style="width:44px;height:44px;border-radius:12px;background:#f8c44f;"></div>
-              <div style="font-size:36px;font-weight:700;color:#ffffff;">${summary.yellowCount}</div>
+              <div style="display:flex;width:44px;height:44px;border-radius:12px;background:#f8c44f;"></div>
+              <div style="display:flex;font-size:36px;font-weight:700;color:#ffffff;">${summary.yellowCount}</div>
             </div>
 
             <div style="display:flex;align-items:center;gap:16px;">
-              <div style="width:44px;height:44px;border-radius:12px;background:#ff4d6d;"></div>
-              <div style="font-size:36px;font-weight:700;color:#ffffff;">${summary.redCount}</div>
+              <div style="display:flex;width:44px;height:44px;border-radius:12px;background:#ff4d6d;"></div>
+              <div style="display:flex;font-size:36px;font-weight:700;color:#ffffff;">${summary.redCount}</div>
             </div>
           </div>
 
-          <div style="margin-top:28px;font-size:20px;color:#8f919d;">
+          <div style="display:flex;margin-top:28px;font-size:20px;color:#8f919d;">
             Green 1-100 • Yellow 101-500 • Red 501+
           </div>
         </div>
