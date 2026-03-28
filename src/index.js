@@ -689,7 +689,7 @@ async function getProgressCardFonts() {
 function getProgressBadgeConfig(status) {
   if (status === "Solved") {
     return {
-      label: "● COMPLETED",
+      label: "COMPLETED",
       fill: "#143924",
       border: "#23c16b",
       text: "#84f0b2",
@@ -698,7 +698,7 @@ function getProgressBadgeConfig(status) {
 
   if (status === "Gave up") {
     return {
-      label: "● GAVE UP",
+      label: "GAVE UP",
       fill: "#431d27",
       border: "#ff5f7a",
       text: "#ffb2bf",
@@ -706,7 +706,7 @@ function getProgressBadgeConfig(status) {
   }
 
   return {
-    label: "● ATTEMPTED",
+    label: "ATTEMPTING",
     fill: "#4a3e17",
     border: "#f8c44f",
     text: "#ffe08a",
@@ -843,8 +843,19 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             color: badge.text,
             fontSize: 26,
             fontWeight: 700,
+            alignItems: "center",
+            gap: 14,
           },
         },
+        h("div", {
+          style: {
+            display: "flex",
+            width: 14,
+            height: 14,
+            borderRadius: 9999,
+            background: badge.text,
+          },
+        }),
         badge.label
       ),
       h(
@@ -901,12 +912,38 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
           {
             style: {
               display: "flex",
-              fontSize: 22,
-              color: "#8e8f9c",
-              paddingBottom: 14,
+              alignItems: "flex-end",
+              justifyContent: "center",
+              gap: 10,
+              paddingBottom: 8,
             },
           },
-          `${summary.hintCount} hints used`
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                fontSize: 62,
+                fontWeight: 700,
+                lineHeight: 0.9,
+                color: "#f5f6fa",
+                letterSpacing: -1,
+              },
+            },
+            String(summary.hintCount)
+          ),
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                fontSize: 22,
+                color: "#8e8f9c",
+                paddingBottom: 10,
+              },
+            },
+            "hints used"
+          )
         )
       ),
       h(
@@ -972,7 +1009,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 18,
+                fontSize: 24,
                 fontWeight: 700,
                 color: "#19d8a0",
               },
@@ -984,7 +1021,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 18,
+                fontSize: 24,
                 fontWeight: 700,
                 color: "#ffcb47",
               },
@@ -996,7 +1033,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 18,
+                fontSize: 24,
                 fontWeight: 700,
                 color: "#ff5a83",
               },
