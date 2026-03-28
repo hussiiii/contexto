@@ -57,6 +57,7 @@ if (missingEnvVars.length > 0) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.join(__dirname, "..");
+const fontConfigFilePath = path.join(projectRoot, "fonts.conf");
 const puzzleFilePath = path.join(projectRoot, "data", "puzzles", "sample.json");
 const generatedDataDirectory = path.join(projectRoot, "data", "generated");
 const semanticCacheFilePath = path.join(
@@ -75,6 +76,10 @@ const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
 const APP_SESSION_TTL_DAYS = 30;
 const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
+
+process.env.FONTCONFIG_PATH = projectRoot;
+process.env.FONTCONFIG_FILE = fontConfigFilePath;
+
 const openai = OPENAI_API_KEY
   ? new OpenAI({
       apiKey: OPENAI_API_KEY,
