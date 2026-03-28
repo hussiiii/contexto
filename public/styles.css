@@ -122,23 +122,12 @@ body.modal-open {
   letter-spacing: 0.08em;
 }
 
-.hero-title span {
+.hero-letter {
   display: inline-block;
   animation: hero-title-wave 2.8s ease-in-out infinite;
+  animation-delay: var(--wave-delay, 0s);
   will-change: transform;
   transform-origin: center bottom;
-}
-
-.hero-title-close {
-  animation-delay: 0s;
-}
-
-.hero-title-mid {
-  animation-delay: 0.18s;
-}
-
-.hero-title-far {
-  animation-delay: 0.36s;
 }
 
 .hero-title-close {
