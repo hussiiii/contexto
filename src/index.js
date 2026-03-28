@@ -828,6 +828,7 @@ function getProgressBadgeConfig(status) {
   if (status === "Solved") {
     return {
       label: "SOLVED",
+      icon: "check",
       fill: "#143924",
       border: "#23c16b",
       text: "#84f0b2",
@@ -837,6 +838,7 @@ function getProgressBadgeConfig(status) {
   if (status === "Gave up") {
     return {
       label: "GAVE UP",
+      icon: "x",
       fill: "#431d27",
       border: "#ff5f7a",
       text: "#ffb2bf",
@@ -845,10 +847,66 @@ function getProgressBadgeConfig(status) {
 
   return {
     label: "ATTEMPTING",
+    icon: "spiral",
     fill: "#4a3e17",
     border: "#f8c44f",
     text: "#ffe08a",
   };
+}
+
+function renderProgressBadgeIcon(h, badge) {
+  const commonSvgProps = {
+    width: 22,
+    height: 22,
+    viewBox: "0 0 24 24",
+    style: {
+      display: "flex",
+      width: 22,
+      height: 22,
+    },
+  };
+
+  if (badge.icon === "check") {
+    return h(
+      "svg",
+      commonSvgProps,
+      h("path", {
+        d: "M5 12.5L9.5 17L19 7.5",
+        fill: "none",
+        stroke: badge.text,
+        strokeWidth: 3.2,
+        strokeLinecap: "round",
+        strokeLinejoin: "round",
+      })
+    );
+  }
+
+  if (badge.icon === "x") {
+    return h(
+      "svg",
+      commonSvgProps,
+      h("path", {
+        d: "M7 7L17 17M17 7L7 17",
+        fill: "none",
+        stroke: badge.text,
+        strokeWidth: 3.2,
+        strokeLinecap: "round",
+      })
+    );
+  }
+
+  return h(
+    "svg",
+    commonSvgProps,
+    h("path", {
+      d: "M6 4C3.8 5.6 2.5 8 2.5 10.8C2.5 15.3 6 18.9 10.4 18.9C14.2 18.9 17.1 16 17.1 12.4C17.1 9.3 14.8 7 11.9 7C9.5 7 7.7 8.8 7.7 11.1C7.7 13 9.1 14.4 10.9 14.4C12.3 14.4 13.4 13.3 13.4 11.9C13.4 10.8 12.6 10 11.6 10",
+      fill: "none",
+      stroke: badge.text,
+      strokeWidth: 2.6,
+      strokeLinecap: "round",
+      strokeLinejoin: "round",
+    })
+  );
 }
 
 function getProgressBarSegments(summary) {
@@ -1026,15 +1084,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             gap: 14,
           },
         },
-        h("div", {
-          style: {
-            display: "flex",
-            width: 14,
-            height: 14,
-            borderRadius: 9999,
-            background: badge.text,
-          },
-        }),
+        renderProgressBadgeIcon(h, badge),
         badge.label
       ),
       h(
