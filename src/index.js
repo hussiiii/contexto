@@ -827,7 +827,7 @@ async function getProgressCardFonts() {
 function getProgressBadgeConfig(status) {
   if (status === "Solved") {
     return {
-      label: "COMPLETED",
+      label: "SOLVED",
       fill: "#143924",
       border: "#23c16b",
       text: "#84f0b2",
