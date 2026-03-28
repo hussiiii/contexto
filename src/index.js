@@ -750,10 +750,50 @@ function getProgressBarSegments(summary) {
   };
 }
 
+function getProgressStatDisplay(status, type, value) {
+  if (status === "Gave up") {
+    return {
+      value: "X",
+      color: "#ff5a83",
+    };
+  }
+
+  if (status !== "Solved") {
+    return {
+      value: String(value),
+      color: "#f5f6fa",
+    };
+  }
+
+  if (type === "guesses") {
+    if (value <= 15) {
+      return { value: String(value), color: "#19d8a0" };
+    }
+
+    if (value <= 35) {
+      return { value: String(value), color: "#ffcb47" };
+    }
+
+    return { value: String(value), color: "#ff5a83" };
+  }
+
+  if (value <= 1) {
+    return { value: String(value), color: "#19d8a0" };
+  }
+
+  if (value <= 5) {
+    return { value: String(value), color: "#ffcb47" };
+  }
+
+  return { value: String(value), color: "#ff5a83" };
+}
+
 function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
   const h = React.createElement;
   const badge = getProgressBadgeConfig(summary.status);
   const segments = getProgressBarSegments(summary);
+  const guessDisplay = getProgressStatDisplay(summary.status, "guesses", summary.guessCount);
+  const hintDisplay = getProgressStatDisplay(summary.status, "hints", summary.hintCount);
   const contextoNumber = getContextoNumber(puzzle);
   const avatarNode = avatarDataUri
     ? h("img", {
@@ -897,11 +937,11 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
               fontSize: 96,
               fontWeight: 700,
               lineHeight: 0.9,
-              color: "#f5f6fa",
+              color: guessDisplay.color,
               letterSpacing: -2,
             },
           },
-          String(summary.guessCount)
+          guessDisplay.value
         ),
         h(
           "div",
@@ -945,11 +985,11 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
                 fontSize: 96,
                 fontWeight: 700,
                 lineHeight: 0.9,
-                color: "#f5f6fa",
+              color: hintDisplay.color,
                 letterSpacing: -2,
               },
             },
-            String(summary.hintCount)
+          hintDisplay.value
           ),
           h(
             "div",
