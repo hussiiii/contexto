@@ -689,7 +689,7 @@ async function getProgressCardFonts() {
 function getProgressBadgeConfig(status) {
   if (status === "Solved") {
     return {
-      label: "✓ Solved",
+      label: "● COMPLETED",
       fill: "#143924",
       border: "#23c16b",
       text: "#84f0b2",
@@ -698,7 +698,7 @@ function getProgressBadgeConfig(status) {
 
   if (status === "Gave up") {
     return {
-      label: "✕ Gave Up",
+      label: "● GAVE UP",
       fill: "#431d27",
       border: "#ff5f7a",
       text: "#ffb2bf",
@@ -706,79 +706,35 @@ function getProgressBadgeConfig(status) {
   }
 
   return {
-    label: "• Attempted",
+    label: "● ATTEMPTED",
     fill: "#4a3e17",
     border: "#f8c44f",
     text: "#ffe08a",
   };
 }
 
-function getProgressSquaresCount(count) {
-  if (count <= 0) {
-    return 0;
+function getProgressBarSegments(summary) {
+  const total = summary.greenCount + summary.yellowCount + summary.redCount;
+
+  if (total <= 0) {
+    return {
+      greenWidth: "0%",
+      yellowWidth: "0%",
+      redWidth: "0%",
+    };
   }
 
-  return Math.max(1, Math.round(count / 5));
-}
-
-function buildToneRow({ color, count }) {
-  const h = React.createElement;
-  const squareCount = getProgressSquaresCount(count);
-  const squares = Array.from({ length: squareCount }, (_value, index) =>
-    h("div", {
-      key: `square-${index}`,
-      style: {
-        display: "flex",
-        width: 30,
-        height: 30,
-        borderRadius: 9,
-        background: color,
-      },
-    })
-  );
-
-  return h(
-    "div",
-    {
-      style: {
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 14,
-      },
-    },
-    h(
-      "div",
-      {
-        style: {
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 10,
-          minWidth: 170,
-        },
-      },
-      ...squares
-    ),
-    h(
-      "div",
-      {
-        style: {
-          display: "flex",
-          fontSize: 34,
-          fontWeight: 700,
-          color: "#ffffff",
-          minWidth: 50,
-        },
-      },
-      String(count)
-    )
-  );
+  return {
+    greenWidth: `${(summary.greenCount / total) * 100}%`,
+    yellowWidth: `${(summary.yellowCount / total) * 100}%`,
+    redWidth: `${(summary.redCount / total) * 100}%`,
+  };
 }
 
 function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
   const h = React.createElement;
   const badge = getProgressBadgeConfig(summary.status);
+  const segments = getProgressBarSegments(summary);
   const avatarNode = avatarDataUri
     ? h("img", {
         src: avatarDataUri,
@@ -879,19 +835,6 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
         {
           style: {
             display: "flex",
-            marginTop: 22,
-            fontSize: 34,
-            fontWeight: 700,
-            color: "#f5f6fa",
-          },
-        },
-        player?.displayName || "Player"
-      ),
-      h(
-        "div",
-        {
-          style: {
-            display: "flex",
             marginTop: 24,
             padding: "14px 30px",
             borderRadius: 9999,
@@ -909,33 +852,158 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
         {
           style: {
             display: "flex",
-            marginTop: 30,
-            fontSize: 30,
-            color: "#d8d9df",
+            marginTop: 34,
+            alignItems: "flex-end",
+            justifyContent: "center",
+            gap: 14,
           },
         },
-        `${summary.guessCount} guesses • ${summary.hintCount} hints`
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              fontSize: 96,
+              fontWeight: 700,
+              lineHeight: 0.9,
+              color: "#f5f6fa",
+              letterSpacing: -2,
+            },
+          },
+          String(summary.guessCount)
+        ),
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              fontSize: 30,
+              color: "#8e8f9c",
+              paddingBottom: 10,
+            },
+          },
+          "guesses"
+        ),
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              fontSize: 42,
+              color: "#676875",
+              paddingBottom: 6,
+            },
+          },
+          "/"
+        ),
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              fontSize: 22,
+              color: "#8e8f9c",
+              paddingBottom: 14,
+            },
+          },
+          `${summary.hintCount} hints used`
+        )
       ),
       h(
         "div",
         {
           style: {
-            marginTop: 56,
+            marginTop: 32,
             width: "100%",
             display: "flex",
             flexDirection: "column",
             alignItems: "center",
             justifyContent: "center",
-            background: "#101013",
-            border: "2px solid #2f3138",
-            borderRadius: 28,
-            padding: "34px 32px",
-            gap: 24,
+            borderTop: "2px solid #2f3138",
+            padding: "34px 0 0",
           },
         },
-        buildToneRow({ color: "#14b87a", count: summary.greenCount }),
-        buildToneRow({ color: "#f8c44f", count: summary.yellowCount }),
-        buildToneRow({ color: "#ff4d6d", count: summary.redCount })
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              width: "100%",
+              height: 28,
+              overflow: "hidden",
+              borderRadius: 9999,
+              background: "#272730",
+            },
+          },
+          h("div", {
+            style: {
+              display: "flex",
+              width: segments.greenWidth,
+              background: "#12c48b",
+            },
+          }),
+          h("div", {
+            style: {
+              display: "flex",
+              width: segments.yellowWidth,
+              background: "#ff9f0a",
+            },
+          }),
+          h("div", {
+            style: {
+              display: "flex",
+              width: segments.redWidth,
+              background: "#ff3366",
+            },
+          })
+        ),
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              width: "100%",
+              justifyContent: "space-between",
+              marginTop: 18,
+            },
+          },
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#19d8a0",
+              },
+            },
+            `${summary.greenCount} close`
+          ),
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#ffcb47",
+              },
+            },
+            `${summary.yellowCount} mid`
+          ),
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                fontSize: 18,
+                fontWeight: 700,
+                color: "#ff5a83",
+              },
+            },
+            `${summary.redCount} far`
+          )
+        )
       )
     )
   );
