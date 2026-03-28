@@ -915,7 +915,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
               alignItems: "flex-end",
               justifyContent: "center",
               gap: 10,
-              paddingBottom: 8,
+              paddingBottom: 10,
             },
           },
           h(
@@ -923,11 +923,11 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 62,
+                fontSize: 96,
                 fontWeight: 700,
                 lineHeight: 0.9,
                 color: "#f5f6fa",
-                letterSpacing: -1,
+                letterSpacing: -2,
               },
             },
             String(summary.hintCount)
@@ -937,7 +937,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 22,
+                fontSize: 30,
                 color: "#8e8f9c",
                 paddingBottom: 10,
               },
@@ -1001,7 +1001,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
               display: "flex",
               width: "100%",
               justifyContent: "space-between",
-              marginTop: 18,
+              marginTop: 20,
             },
           },
           h(
@@ -1009,7 +1009,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 24,
+                fontSize: 32,
                 fontWeight: 700,
                 color: "#19d8a0",
               },
@@ -1021,7 +1021,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 24,
+                fontSize: 32,
                 fontWeight: 700,
                 color: "#ffcb47",
               },
@@ -1033,7 +1033,7 @@ function buildProgressCardMarkup({ summary, avatarDataUri, player, puzzle }) {
             {
               style: {
                 display: "flex",
-                fontSize: 24,
+                fontSize: 32,
                 fontWeight: 700,
                 color: "#ff5a83",
               },
