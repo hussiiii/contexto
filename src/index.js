@@ -1656,11 +1656,11 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
   const winner = entries[0];
   const remainingEntries = entries.slice(1);
   const contextoNumber = getContextoNumber(puzzle);
-  const cardWidth = 1360;
-  const winnerHeight = 276;
-  const rowHeight = 182;
-  const footerHeight = hiddenCount > 0 ? 66 : 0;
-  const cardHeight = 136 + winnerHeight + remainingEntries.length * rowHeight + footerHeight + 32;
+  const cardWidth = 1600;
+  const winnerHeight = 332;
+  const rowHeight = 222;
+  const footerHeight = hiddenCount > 0 ? 82 : 0;
+  const cardHeight = 156 + winnerHeight + remainingEntries.length * rowHeight + footerHeight + 36;
   const winnerGuessDisplay = getProgressStatDisplay(
     winner.summary.status,
     "guesses",
@@ -1672,10 +1672,10 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
     winner.summary.hintCount
   );
   const winnerAvatar = renderAvatarNode(h, winner.player, winner.avatarDataUri, {
-    size: 136,
-    borderWidth: 6,
+    size: 172,
+    borderWidth: 8,
     borderColor: "#a56a00",
-    fontSize: 52,
+    fontSize: 64,
   });
 
   return h(
@@ -1686,8 +1686,8 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
         height: cardHeight,
         display: "flex",
         background: "#0c0d12",
-        borderRadius: 36,
-        padding: 18,
+        borderRadius: 42,
+        padding: 22,
         color: "#f5f6fa",
       },
     },
@@ -1700,8 +1700,8 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
-          borderRadius: 28,
-          border: "2px solid #2b2d35",
+          borderRadius: 34,
+          border: "3px solid #2b2d35",
           background: "#1a1b20",
         },
       },
@@ -1712,9 +1712,9 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "30px 38px",
+            padding: "36px 44px",
             background: "#1b1c22",
-            borderBottom: "2px solid #30323c",
+            borderBottom: "3px solid #30323c",
           },
         },
         h(
@@ -1722,7 +1722,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
           {
             style: {
               display: "flex",
-              fontSize: 36,
+              fontSize: 44,
               fontWeight: 700,
             },
           },
@@ -1733,7 +1733,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
           {
             style: {
               display: "flex",
-              fontSize: 34,
+              fontSize: 40,
               color: "#9092a0",
             },
           },
@@ -1747,11 +1747,11 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 34,
-            padding: "34px 38px",
+            gap: 42,
+            padding: "40px 44px",
             minHeight: winnerHeight,
             background: "#2a231d",
-            borderBottom: remainingEntries.length > 0 ? "2px solid #30323c" : "none",
+            borderBottom: remainingEntries.length > 0 ? "3px solid #30323c" : "none",
           },
         },
         h(
@@ -1760,7 +1760,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
             style: {
               display: "flex",
               alignItems: "center",
-              gap: 28,
+              gap: 34,
               flex: 1,
             },
           },
@@ -1772,16 +1772,16 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                minWidth: 168,
+                minWidth: 206,
               },
             },
-            renderCrownIcon(h, 50),
+            renderCrownIcon(h, 62),
             h(
               "div",
               {
                 style: {
                   display: "flex",
-                  marginTop: -8,
+                  marginTop: -10,
                 },
               },
               winnerAvatar
@@ -1794,7 +1794,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "center",
-                gap: 20,
+                gap: 24,
                 flex: 1,
               },
             },
@@ -1805,7 +1805,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  gap: 24,
+                  gap: 30,
                 },
               },
               h(
@@ -1813,7 +1813,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 48,
+                    fontSize: 58,
                     fontWeight: 700,
                     lineHeight: 1,
                     flex: 1,
@@ -1822,11 +1822,11 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 winner.player.displayName
               ),
               renderStatusBadge(h, winner.summary.status, {
-                fontSize: 24,
-                paddingY: 14,
-                paddingX: 24,
-                iconSize: 20,
-                gap: 12,
+                fontSize: 28,
+                paddingY: 16,
+                paddingX: 28,
+                iconSize: 24,
+                gap: 14,
               })
             ),
             h(
@@ -1835,7 +1835,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 style: {
                   display: "flex",
                   alignItems: "flex-end",
-                  gap: 14,
+                  gap: 16,
                 },
               },
               h(
@@ -1843,7 +1843,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 96,
+                    fontSize: 120,
                     fontWeight: 700,
                     lineHeight: 0.9,
                     letterSpacing: -2,
@@ -1851,6 +1851,167 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                   },
                 },
                 winnerGuessDisplay.value
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 42,
+                    color: "#8f92a0",
+                    paddingBottom: 14,
+                  },
+                },
+                "guesses"
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 38,
+                    color: "#7f8190",
+                    paddingBottom: 12,
+                  },
+                },
+                "/"
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 120,
+                    fontWeight: 700,
+                    lineHeight: 0.9,
+                    letterSpacing: -2,
+                    color: winnerHintDisplay.color,
+                  },
+                },
+                winnerHintDisplay.value
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 42,
+                    color: "#8f92a0",
+                    paddingBottom: 14,
+                  },
+                },
+                winner.summary.hintCount === 1 ? "hint" : "hints"
+              )
+            )
+          )
+        )
+      ),
+      ...remainingEntries.flatMap((entry, index) => {
+        const guessDisplay = getProgressStatDisplay(entry.summary.status, "guesses", entry.summary.guessCount);
+        const hintDisplay = getProgressStatDisplay(entry.summary.status, "hints", entry.summary.hintCount);
+        const avatarNode = renderAvatarNode(h, entry.player, entry.avatarDataUri, {
+          size: 104,
+          borderWidth: 5,
+          borderColor: "#2f313a",
+          fontSize: 38,
+        });
+
+        return [
+          h(
+            "div",
+            {
+              key: `row-${entry.player.userId}`,
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 34,
+                minHeight: rowHeight,
+                padding: "30px 44px",
+                background: "#1a1b20",
+                borderBottom:
+                  index === remainingEntries.length - 1 && hiddenCount === 0 ? "none" : "3px solid #30323c",
+              },
+            },
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 34,
+                  flex: 1,
+                },
+              },
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    width: 52,
+                    justifyContent: "center",
+                    fontSize: 42,
+                    color: "#767987",
+                    flexShrink: 0,
+                  },
+                },
+                String(index + 2)
+              ),
+              avatarNode,
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 20,
+                    flex: 1,
+                  },
+                },
+                h(
+                  "div",
+                  {
+                    style: {
+                      display: "flex",
+                      fontSize: 46,
+                      fontWeight: 400,
+                      lineHeight: 1,
+                    },
+                  },
+                  entry.player.displayName
+                ),
+                renderStatusBadge(h, entry.summary.status, {
+                  fontSize: 24,
+                  paddingY: 12,
+                  paddingX: 16,
+                  iconSize: 20,
+                  gap: 10,
+                })
+              )
+            ),
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: 12,
+                  marginLeft: 26,
+                },
+              },
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 88,
+                    fontWeight: 700,
+                    lineHeight: 0.9,
+                    letterSpacing: -1.5,
+                    color: guessDisplay.color,
+                  },
+                },
+                guessDisplay.value
               ),
               h(
                 "div",
@@ -1871,7 +2032,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                     display: "flex",
                     fontSize: 32,
                     color: "#7f8190",
-                    paddingBottom: 10,
+                    paddingBottom: 11,
                   },
                 },
                 "/"
@@ -1881,168 +2042,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 96,
-                    fontWeight: 700,
-                    lineHeight: 0.9,
-                    letterSpacing: -2,
-                    color: winnerHintDisplay.color,
-                  },
-                },
-                winnerHintDisplay.value
-              ),
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    fontSize: 34,
-                    color: "#8f92a0",
-                    paddingBottom: 12,
-                  },
-                },
-                winner.summary.hintCount === 1 ? "hint" : "hints"
-              )
-            )
-          )
-        )
-      ),
-      ...remainingEntries.flatMap((entry, index) => {
-        const guessDisplay = getProgressStatDisplay(entry.summary.status, "guesses", entry.summary.guessCount);
-        const hintDisplay = getProgressStatDisplay(entry.summary.status, "hints", entry.summary.hintCount);
-        const avatarNode = renderAvatarNode(h, entry.player, entry.avatarDataUri, {
-          size: 82,
-          borderWidth: 4,
-          borderColor: "#2f313a",
-          fontSize: 30,
-        });
-
-        return [
-          h(
-            "div",
-            {
-              key: `row-${entry.player.userId}`,
-              style: {
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-                gap: 28,
-                minHeight: rowHeight,
-                padding: "24px 38px",
-                background: "#1a1b20",
-                borderBottom:
-                  index === remainingEntries.length - 1 && hiddenCount === 0 ? "none" : "2px solid #30323c",
-              },
-            },
-            h(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 28,
-                  flex: 1,
-                },
-              },
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    width: 42,
-                    justifyContent: "center",
-                    fontSize: 34,
-                    color: "#767987",
-                    flexShrink: 0,
-                  },
-                },
-                String(index + 2)
-              ),
-              avatarNode,
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 16,
-                    flex: 1,
-                  },
-                },
-                h(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      fontSize: 36,
-                      fontWeight: 400,
-                      lineHeight: 1,
-                    },
-                  },
-                  entry.player.displayName
-                ),
-                renderStatusBadge(h, entry.summary.status, {
-                  fontSize: 20,
-                  paddingY: 10,
-                  paddingX: 14,
-                  iconSize: 16,
-                  gap: 8,
-                })
-              )
-            ),
-            h(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  alignItems: "flex-end",
-                  gap: 10,
-                  marginLeft: 20,
-                },
-              },
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    fontSize: 68,
-                    fontWeight: 700,
-                    lineHeight: 0.9,
-                    letterSpacing: -1.5,
-                    color: guessDisplay.color,
-                  },
-                },
-                guessDisplay.value
-              ),
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    fontSize: 26,
-                    color: "#8f92a0",
-                    paddingBottom: 10,
-                  },
-                },
-                "guesses"
-              ),
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    fontSize: 26,
-                    color: "#7f8190",
-                    paddingBottom: 9,
-                  },
-                },
-                "/"
-              ),
-              h(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    fontSize: 68,
+                    fontSize: 88,
                     fontWeight: 700,
                     lineHeight: 0.9,
                     letterSpacing: -1.5,
@@ -2056,9 +2056,9 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 26,
+                    fontSize: 34,
                     color: "#8f92a0",
-                    paddingBottom: 10,
+                    paddingBottom: 12,
                   },
                 },
                 entry.summary.hintCount === 1 ? "hint" : "hints"
@@ -2076,9 +2076,9 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 alignItems: "center",
                 justifyContent: "center",
                 minHeight: footerHeight,
-                padding: "16px 24px",
+                padding: "18px 28px",
                 color: "#8f92a0",
-                fontSize: 24,
+                fontSize: 30,
                 background: "#18191f",
               },
             },
@@ -2105,16 +2105,16 @@ async function renderLeaderboardCardBuffer({ puzzle, entries }) {
   });
   const fonts = await getProgressCardFonts();
   const height =
-    136 + 276 + Math.max(0, visibleEntries.length - 1) * 182 + (hiddenCount > 0 ? 66 : 0) + 32;
+    156 + 332 + Math.max(0, visibleEntries.length - 1) * 222 + (hiddenCount > 0 ? 82 : 0) + 36;
   const svg = await satori(markup, {
-    width: 1360,
+    width: 1600,
     height,
     fonts,
   });
   const resvg = new Resvg(svg, {
     fitTo: {
       mode: "width",
-      value: 1360,
+      value: 1600,
     },
   });
 
