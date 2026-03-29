@@ -35,6 +35,7 @@ const {
   DISCORD_REDIRECT_URI,
   DISCORD_GUILD_ID,
   DEFAULT_CHANNEL_ID,
+  LEADERBOARD_CHANNEL_ID,
   DATABASE_URL,
   OPENAI_API_KEY,
   OPENAI_BASE_URL,
@@ -88,6 +89,8 @@ const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
 const CONTEXTO_EPOCH_DATE = "2026-03-25";
 const PUZZLE_TIMEZONE = "America/Los_Angeles";
 const PRECOMPUTE_TRIGGER_TOKEN = process.env.PRECOMPUTE_TRIGGER_TOKEN || "";
+const LEADERBOARD_TRIGGER_TOKEN =
+  process.env.LEADERBOARD_TRIGGER_TOKEN || PRECOMPUTE_TRIGGER_TOKEN || "";
 const PUZZLE_DATE_OVERRIDE = String(process.env.PUZZLE_DATE_OVERRIDE || "").trim() || null;
 const PUZZLE_ANSWER_OVERRIDE = String(process.env.PUZZLE_ANSWER_OVERRIDE || "").trim() || null;
 
@@ -394,6 +397,17 @@ async function ensureProgressStorage() {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (user_id, puzzle_id, channel_id)
+        )
+      `);
+      await progressPool.query(`
+        CREATE TABLE IF NOT EXISTS leaderboard_messages (
+          puzzle_id TEXT NOT NULL,
+          guild_id TEXT,
+          channel_id TEXT NOT NULL,
+          message_id TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (puzzle_id, channel_id)
         )
       `);
       await progressPool.query(`
@@ -2145,6 +2159,48 @@ function buildLeaderboardMessageContent({ puzzle, entries, streak, timeframeLabe
   return [intro, ...scoreLines].join("\n");
 }
 
+async function loadLeaderboardMessageRecord({ puzzleId, channelId }) {
+  if (!progressPool || !puzzleId || !channelId) {
+    return null;
+  }
+
+  const result = await progressPool.query(
+    `
+      SELECT message_id
+      FROM leaderboard_messages
+      WHERE puzzle_id = $1 AND channel_id = $2
+      LIMIT 1
+    `,
+    [puzzleId, channelId]
+  );
+
+  return result.rows[0]?.message_id || null;
+}
+
+async function saveLeaderboardMessageRecord({ puzzleId, guildId, channelId, messageId }) {
+  if (!progressPool || !puzzleId || !channelId || !messageId) {
+    return;
+  }
+
+  await progressPool.query(
+    `
+      INSERT INTO leaderboard_messages (
+        puzzle_id,
+        guild_id,
+        channel_id,
+        message_id
+      )
+      VALUES ($1, $2, $3, $4)
+      ON CONFLICT (puzzle_id, channel_id)
+      DO UPDATE SET
+        guild_id = EXCLUDED.guild_id,
+        message_id = EXCLUDED.message_id,
+        updated_at = NOW()
+    `,
+    [puzzleId, guildId || null, channelId, messageId]
+  );
+}
+
 async function loadProgressMessageRecord({ userId, puzzleId, channelId }) {
   if (!progressPool || !userId || !puzzleId || !channelId) {
     return null;
@@ -3197,6 +3253,92 @@ async function buildLeaderboardAttachment({ guildId, dateInput, defaultDayOffset
   };
 }
 
+async function buildLeaderboardMessagePayload({ guildId, dateInput, defaultDayOffset = -1 }) {
+  const result = await buildLeaderboardAttachment({
+    guildId,
+    dateInput,
+    defaultDayOffset,
+  });
+
+  return {
+    ...result,
+    payload: {
+      content: buildLeaderboardMessageContent({
+        puzzle: result.puzzle,
+        entries: result.entries,
+        streak: result.streak,
+        timeframeLabel: result.timeframeLabel,
+      }),
+      files: [result.attachment],
+      allowedMentions: {
+        users: result.entries.map((entry) => entry.player.userId).filter(Boolean),
+      },
+    },
+  };
+}
+
+async function syncLeaderboardMessage({ channelId, dateInput, defaultDayOffset = -1 }) {
+  if (!client.isReady()) {
+    throw new Error("Discord bot is not ready yet.");
+  }
+
+  const targetChannelId = normalizeOptionalText(channelId, 80) || LEADERBOARD_CHANNEL_ID || null;
+
+  if (!targetChannelId) {
+    throw new Error("Missing leaderboard channel. Set LEADERBOARD_CHANNEL_ID.");
+  }
+
+  const channel = await client.channels.fetch(targetChannelId).catch(() => null);
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error("Leaderboard target channel is missing or is not text-based.");
+  }
+
+  const guildId = normalizeOptionalText(channel.guildId, 80) || null;
+  const { puzzle, payload } = await buildLeaderboardMessagePayload({
+    guildId,
+    dateInput,
+    defaultDayOffset,
+  });
+  const existingMessageId = await loadLeaderboardMessageRecord({
+    puzzleId: puzzle.id,
+    channelId: targetChannelId,
+  });
+
+  if (existingMessageId) {
+    const existingMessage = await channel.messages.fetch(existingMessageId).catch(() => null);
+
+    if (existingMessage) {
+      await existingMessage.edit({
+        ...payload,
+        attachments: [],
+      });
+
+      return {
+        puzzle,
+        channelId: targetChannelId,
+        messageId: existingMessage.id,
+        created: false,
+      };
+    }
+  }
+
+  const sentMessage = await channel.send(payload);
+  await saveLeaderboardMessageRecord({
+    puzzleId: puzzle.id,
+    guildId,
+    channelId: targetChannelId,
+    messageId: sentMessage.id,
+  });
+
+  return {
+    puzzle,
+    channelId: targetChannelId,
+    messageId: sentMessage.id,
+    created: true,
+  };
+}
+
 async function replyEphemeral(interaction, content) {
   const payload = {
     content,
@@ -3341,6 +3483,53 @@ async function handleInternalPrecompute(req, res) {
 
 app.get("/internal/precompute", handleInternalPrecompute);
 app.post("/internal/precompute", handleInternalPrecompute);
+
+async function handleInternalPostLeaderboard(req, res) {
+  try {
+    if (LEADERBOARD_TRIGGER_TOKEN) {
+      const providedToken = String(
+        req.headers["x-leaderboard-token"] || req.body?.token || req.query?.token || ""
+      ).trim();
+
+      if (providedToken !== LEADERBOARD_TRIGGER_TOKEN) {
+        res.status(401).json({
+          ok: false,
+          error: "Unauthorized leaderboard post request.",
+        });
+        return;
+      }
+    }
+
+    const result = await syncLeaderboardMessage({
+      channelId: req.body?.channelId || req.query?.channelId || null,
+      dateInput: req.body?.date || req.query?.date || null,
+      defaultDayOffset:
+        String(req.body?.timeframe || req.query?.timeframe || "")
+          .trim()
+          .toLowerCase() === "today"
+          ? 0
+          : -1,
+    });
+
+    res.json({
+      ok: true,
+      puzzleId: result.puzzle.id,
+      date: result.puzzle.date,
+      channelId: result.channelId,
+      messageId: result.messageId,
+      created: result.created,
+    });
+  } catch (error) {
+    console.error("Failed to post leaderboard:", error);
+    res.status(500).json({
+      ok: false,
+      error: error instanceof Error ? error.message : "Failed to post leaderboard.",
+    });
+  }
+}
+
+app.get("/internal/post-leaderboard", handleInternalPostLeaderboard);
+app.post("/internal/post-leaderboard", handleInternalPostLeaderboard);
 
 app.get("/api/puzzle", async (_req, res) => {
   try {

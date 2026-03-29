@@ -197,6 +197,71 @@ When you're done testing, switch back to:
 
 5. Keep the main app service `PRECOMPUTE_TRIGGER_TOKEN` set too, since the app endpoint validates it.
 
+## Daily Leaderboard Automation
+
+The app can also auto-post yesterday's leaderboard into Discord from a second Railway Function.
+
+### App service env vars
+
+Set these on the main app service:
+
+- `LEADERBOARD_CHANNEL_ID`: Discord text channel where the daily leaderboard should be posted
+- `LEADERBOARD_TRIGGER_TOKEN`: shared secret for the internal leaderboard-post endpoint
+
+`LEADERBOARD_TRIGGER_TOKEN` can reuse the same value as `PRECOMPUTE_TRIGGER_TOKEN` if you want to keep setup simple.
+
+### Internal endpoint
+
+The app exposes:
+
+- `POST /internal/post-leaderboard`
+- `GET /internal/post-leaderboard`
+
+This endpoint is intended for your Railway Function only. It is token-protected so random people cannot trigger bot posts or spam leaderboard renders from the public internet.
+
+### Railway Function file
+
+The repo includes `railway/post-leaderboard-cron.ts`.
+
+Set these on the Railway leaderboard Function service:
+
+- `LEADERBOARD_TARGET_URL`: full URL to your app endpoint, for example `https://your-app.up.railway.app/internal/post-leaderboard`
+- `LEADERBOARD_TRIGGER_TOKEN`: must match the app service token
+- `LEADERBOARD_TIMEFRAME`: leave this as `yesterday`
+- `LEADERBOARD_CHANNEL_ID`: optional override; usually match the app service channel
+- `LEADERBOARD_DATE_OVERRIDE`: optional, only for manual testing
+
+### Recommended schedule
+
+For automatic posting at `8:00 AM` Los Angeles time, use a once-daily Railway cron and switch it for DST:
+
+```text
+PDT: 0 15 * * *
+PST: 0 16 * * *
+```
+
+These are the UTC equivalents of `8:00 AM` Los Angeles:
+
+- `0 15 * * *` during `PDT`
+- `0 16 * * *` during `PST`
+
+### UI setup flow
+
+1. Create a new Railway `Function` service.
+2. Open its `Source Code` tab.
+3. Paste in the contents of `railway/post-leaderboard-cron.ts`.
+4. Save and deploy it.
+5. Add the function env vars listed above.
+6. Set the cron schedule to `0 15 * * *` during `PDT` or `0 16 * * *` during `PST`.
+
+### What happens daily
+
+1. The Railway Function fires at `8:00 AM` Los Angeles time.
+2. It calls your app's `/internal/post-leaderboard` endpoint.
+3. The app builds yesterday's leaderboard for the configured server/channel.
+4. The bot posts it into `LEADERBOARD_CHANNEL_ID`.
+5. If the job is triggered again for the same puzzle/channel, the existing message is updated instead of duplicating it.
+
 ## Turning this into a Discord Activity
 
 This MVP now supports both a normal browser launch and an embedded Discord Activity launch.
