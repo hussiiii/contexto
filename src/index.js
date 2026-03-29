@@ -82,6 +82,7 @@ const RANKING_VOCAB_SIZE = Number(process.env.RANKING_VOCAB_SIZE || "50000");
 const EMBEDDING_BATCH_SIZE = Number(process.env.EMBEDDING_BATCH_SIZE || "128");
 const SCORING_VERSION = "lexical-penalty-v2-family-dedupe-v1-popular-words-v1";
 const APP_SESSION_TTL_DAYS = 30;
+const LEADERBOARD_ENTRY_LIMIT = 10;
 const DISCORD_OAUTH_TOKEN_URL = "https://discord.com/api/oauth2/token";
 const DISCORD_OAUTH_ME_URL = "https://discord.com/api/oauth2/@me";
 const CONTEXTO_EPOCH_DATE = "2026-03-25";
@@ -161,6 +162,20 @@ const slashCommands = [
         .setRequired(false)
     )
     .toJSON(),
+  new SlashCommandBuilder()
+    .setName("contexto-leaderboard")
+    .setDescription("Render the Contexto leaderboard for a puzzle day.")
+    .addStringOption((option) =>
+      option
+        .setName("date")
+        .setDescription("Puzzle date in YYYY-MM-DD. Defaults to yesterday in Los Angeles.")
+        .setRequired(false)
+    )
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName("contexto-leaderboard-today")
+    .setDescription("Render the Contexto leaderboard for today's puzzle.")
+    .toJSON(),
 ];
 
 async function registerGuildCommands() {
@@ -212,6 +227,13 @@ function formatPuzzleDate(dateId) {
   return `${month}/${day}/${year}`;
 }
 
+function formatDateIdFromUtcDate(date) {
+  const year = String(date.getUTCFullYear());
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function getPuzzleSequenceNumber(dateId) {
   const epoch = new Date(`${CONTEXTO_EPOCH_DATE}T00:00:00Z`);
   const current = new Date(`${dateId}T00:00:00Z`);
@@ -223,9 +245,41 @@ function getPuzzleSequenceNumber(dateId) {
   return Math.round((current.getTime() - epoch.getTime()) / 86400000) + 1;
 }
 
+function shiftPuzzleDateId(dateId, dayOffset) {
+  const baseDate = new Date(`${dateId}T12:00:00Z`);
+
+  if (Number.isNaN(baseDate.getTime())) {
+    throw new Error(`Invalid puzzle date: "${dateId}"`);
+  }
+
+  baseDate.setUTCDate(baseDate.getUTCDate() + dayOffset);
+  return formatDateIdFromUtcDate(baseDate);
+}
+
 function normalizePuzzleDateOverride(dateId) {
   const trimmed = String(dateId || "").trim();
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
+}
+
+async function loadPuzzleForDateId(puzzleDateId) {
+  const normalizedDateId = normalizePuzzleDateOverride(puzzleDateId);
+
+  if (!normalizedDateId) {
+    throw new Error(`Invalid puzzle date: "${puzzleDateId}"`);
+  }
+
+  const orderedAnswers = await getOrderedAnswers();
+  const contextoNumber = getPuzzleSequenceNumber(normalizedDateId);
+  const answerIndex =
+    ((contextoNumber - 1) % orderedAnswers.length + orderedAnswers.length) % orderedAnswers.length;
+  const answer = normalizeGuess(PUZZLE_ANSWER_OVERRIDE) || orderedAnswers[answerIndex];
+
+  return {
+    id: normalizedDateId,
+    date: formatPuzzleDate(normalizedDateId),
+    answer,
+    contextoNumber,
+  };
 }
 
 async function getOrderedAnswers() {
@@ -270,17 +324,7 @@ async function getOrderedAnswers() {
 
 async function loadPuzzle() {
   const puzzleDateId = normalizePuzzleDateOverride(PUZZLE_DATE_OVERRIDE) || getCurrentPuzzleDateId();
-  const orderedAnswers = await getOrderedAnswers();
-  const contextoNumber = getPuzzleSequenceNumber(puzzleDateId);
-  const answerIndex = ((contextoNumber - 1) % orderedAnswers.length + orderedAnswers.length) % orderedAnswers.length;
-  const answer = normalizeGuess(PUZZLE_ANSWER_OVERRIDE) || orderedAnswers[answerIndex];
-
-  return {
-    id: puzzleDateId,
-    date: formatPuzzleDate(puzzleDateId),
-    answer,
-    contextoNumber,
-  };
+  return loadPuzzleForDateId(puzzleDateId);
 }
 
 function isProgressPersistenceEnabled() {
@@ -320,6 +364,10 @@ async function ensureProgressStorage() {
       await progressPool.query(`
         CREATE INDEX IF NOT EXISTS player_progress_puzzle_id_idx
         ON player_progress (puzzle_id)
+      `);
+      await progressPool.query(`
+        CREATE INDEX IF NOT EXISTS player_progress_puzzle_id_guild_id_idx
+        ON player_progress (puzzle_id, guild_id)
       `);
       await progressPool.query(`
         CREATE TABLE IF NOT EXISTS app_sessions (
@@ -759,6 +807,128 @@ function summarizePlayerProgress(progress) {
   };
 }
 
+function getLeaderboardScore(summary) {
+  return summary.guessCount + Math.max(0, summary.hintCount - 1) * 4;
+}
+
+function getLeaderboardStatusPriority(status) {
+  if (status === "Solved") {
+    return 0;
+  }
+
+  if (status === "Attempted") {
+    return 1;
+  }
+
+  return 2;
+}
+
+async function loadLeaderboardEntries({ puzzleId, guildId, limit = null }) {
+  if (!progressPool) {
+    throw new Error("Leaderboard requires DATABASE_URL to be configured.");
+  }
+
+  await ensureProgressStorage();
+
+  const params = [puzzleId];
+  const guildFilter = guildId ? "AND guild_id = $2" : "";
+
+  if (guildId) {
+    params.push(guildId);
+  }
+
+  const result = await progressPool.query(
+    `
+      SELECT
+        user_id,
+        guild_id,
+        channel_id,
+        display_name,
+        avatar_url,
+        guesses_json,
+        solved_answer,
+        gave_up,
+        started_at,
+        finished_at
+      FROM player_progress
+      WHERE puzzle_id = $1
+      ${guildFilter}
+    `,
+    params
+  );
+
+  const entries = result.rows
+    .map((row) => {
+      const progress = {
+        guesses: normalizeStoredGuesses(row.guesses_json),
+        solvedAnswer: normalizeOptionalText(row.solved_answer, 120),
+        gaveUp: Boolean(row.gave_up),
+      };
+      const summary = summarizePlayerProgress(progress);
+
+      return {
+        player: {
+          userId: normalizeOptionalText(row.user_id, 80),
+          displayName: normalizeOptionalText(row.display_name, 120) || "Player",
+          avatarUrl: normalizeOptionalText(row.avatar_url, 500),
+          guildId: normalizeOptionalText(row.guild_id, 80),
+          channelId: normalizeOptionalText(row.channel_id, 80),
+        },
+        summary,
+        leaderboardScore: getLeaderboardScore(summary),
+        finishedAt: row.finished_at ? new Date(row.finished_at) : null,
+        startedAt: row.started_at ? new Date(row.started_at) : null,
+      };
+    })
+    .filter(
+      (entry) =>
+        entry.player.userId &&
+        (entry.summary.guessCount > 0 || entry.summary.hintCount > 0 || entry.summary.status !== "Attempted")
+    );
+
+  entries.sort((left, right) => {
+    const statusDifference =
+      getLeaderboardStatusPriority(left.summary.status) -
+      getLeaderboardStatusPriority(right.summary.status);
+
+    if (statusDifference !== 0) {
+      return statusDifference;
+    }
+
+    if (left.leaderboardScore !== right.leaderboardScore) {
+      return left.leaderboardScore - right.leaderboardScore;
+    }
+
+    if (left.summary.guessCount !== right.summary.guessCount) {
+      return left.summary.guessCount - right.summary.guessCount;
+    }
+
+    if (left.summary.hintCount !== right.summary.hintCount) {
+      return left.summary.hintCount - right.summary.hintCount;
+    }
+
+    if (left.finishedAt && right.finishedAt) {
+      const finishedDifference = left.finishedAt.getTime() - right.finishedAt.getTime();
+
+      if (finishedDifference !== 0) {
+        return finishedDifference;
+      }
+    }
+
+    if (left.startedAt && right.startedAt) {
+      const startedDifference = left.startedAt.getTime() - right.startedAt.getTime();
+
+      if (startedDifference !== 0) {
+        return startedDifference;
+      }
+    }
+
+    return left.player.displayName.localeCompare(right.player.displayName);
+  });
+
+  return Number.isFinite(limit) ? entries.slice(0, limit) : entries;
+}
+
 function getPlayerInitials(player) {
   const source = String(player?.displayName || "Player").trim();
   const parts = source.split(/\s+/).filter(Boolean).slice(0, 2);
@@ -854,8 +1024,8 @@ function getProgressBadgeConfig(status) {
   };
 }
 
-function renderProgressBadgeIcon(h, badge) {
-  const iconSize = badge.icon === "spiral" ? 28 : 22;
+function renderProgressBadgeIcon(h, badge, sizeOverride = null) {
+  const iconSize = sizeOverride || (badge.icon === "spiral" ? 28 : 22);
   const commonSvgProps = {
     width: iconSize,
     height: iconSize,
@@ -906,6 +1076,127 @@ function renderProgressBadgeIcon(h, badge) {
       strokeWidth: 2.6,
       strokeLinecap: "round",
       strokeLinejoin: "round",
+    })
+  );
+}
+
+function renderAvatarNode(h, player, avatarDataUri, options = {}) {
+  const size = options.size || 220;
+  const borderWidth = options.borderWidth || 6;
+  const borderColor = options.borderColor || "#35353d";
+  const fontSize = options.fontSize || Math.round(size * 0.34);
+
+  if (avatarDataUri) {
+    return h("img", {
+      src: avatarDataUri,
+      width: size,
+      height: size,
+      style: {
+        width: size,
+        height: size,
+        borderRadius: 9999,
+        border: `${borderWidth}px solid ${borderColor}`,
+      },
+    });
+  }
+
+  return h(
+    "div",
+    {
+      style: {
+        width: size,
+        height: size,
+        borderRadius: 9999,
+        border: `${borderWidth}px solid ${borderColor}`,
+        background: "#464652",
+        color: "#c7c8d3",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize,
+        fontWeight: 700,
+      },
+    },
+    getPlayerInitials(player)
+  );
+}
+
+function renderStatusBadge(h, status, options = {}) {
+  const badge = getProgressBadgeConfig(status);
+  const fontSize = options.fontSize || 26;
+  const paddingY = options.paddingY || 14;
+  const paddingX = options.paddingX || 30;
+  const iconSize = options.iconSize || (fontSize >= 24 ? 22 : 16);
+  const gap = options.gap || 14;
+
+  return h(
+    "div",
+    {
+      style: {
+        display: "flex",
+        padding: `${paddingY}px ${paddingX}px`,
+        borderRadius: 9999,
+        background: badge.fill,
+        border: `2px solid ${badge.border}`,
+        color: badge.text,
+        fontSize,
+        fontWeight: 700,
+        alignItems: "center",
+        gap,
+      },
+    },
+    renderProgressBadgeIcon(h, badge, iconSize),
+    badge.label
+  );
+}
+
+function renderCrownIcon(h, size = 40) {
+  return h(
+    "svg",
+    {
+      width: size,
+      height: size,
+      viewBox: "0 0 64 64",
+      style: {
+        display: "flex",
+        width: size,
+        height: size,
+      },
+    },
+    h("path", {
+      d: "M11 48L16 23L28 34L32 16L36 34L48 23L53 48Z",
+      fill: "#f4c542",
+      stroke: "#a96c00",
+      strokeWidth: 3,
+      strokeLinejoin: "round",
+    }),
+    h("rect", {
+      x: 9,
+      y: 47,
+      width: 46,
+      height: 8,
+      rx: 4,
+      fill: "#f0b429",
+      stroke: "#a96c00",
+      strokeWidth: 3,
+    }),
+    h("circle", {
+      cx: 16,
+      cy: 21,
+      r: 4,
+      fill: "#ff5a83",
+    }),
+    h("circle", {
+      cx: 32,
+      cy: 14,
+      r: 4,
+      fill: "#19d8a0",
+    }),
+    h("circle", {
+      cx: 48,
+      cy: 21,
+      r: 4,
+      fill: "#4da3ff",
     })
   );
 }
@@ -1303,8 +1594,433 @@ async function renderProgressCardBuffer({ player, puzzle, progress }) {
   };
 }
 
+function formatHintLabel(hintCount, compact = false) {
+  if (hintCount <= 0) {
+    return compact ? "" : "0 hints";
+  }
+
+  if (compact) {
+    return ` / ${hintCount}h`;
+  }
+
+  return `${hintCount} ${hintCount === 1 ? "hint" : "hints"}`;
+}
+
+function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
+  const h = React.createElement;
+  const winner = entries[0];
+  const remainingEntries = entries.slice(1);
+  const cardWidth = 1220;
+  const winnerHeight = 232;
+  const rowHeight = 148;
+  const footerHeight = hiddenCount > 0 ? 54 : 0;
+  const cardHeight = 118 + winnerHeight + remainingEntries.length * rowHeight + footerHeight + 28;
+  const winnerAvatar = renderAvatarNode(h, winner.player, winner.avatarDataUri, {
+    size: 112,
+    borderWidth: 5,
+    borderColor: "#a56a00",
+    fontSize: 42,
+  });
+
+  return h(
+    "div",
+    {
+      style: {
+        width: cardWidth,
+        height: cardHeight,
+        display: "flex",
+        background: "#0c0d12",
+        borderRadius: 36,
+        padding: 18,
+        color: "#f5f6fa",
+      },
+    },
+    h(
+      "div",
+      {
+        style: {
+          width: "100%",
+          height: "100%",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          borderRadius: 28,
+          border: "2px solid #2b2d35",
+          background: "#1a1b20",
+        },
+      },
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "28px 34px",
+            background: "#1b1c22",
+            borderBottom: "2px solid #30323c",
+          },
+        },
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              fontSize: 32,
+              fontWeight: 700,
+            },
+          },
+          "Contexto Leaderboard"
+        ),
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              fontSize: 30,
+              color: "#9092a0",
+            },
+          },
+          puzzle.date
+        )
+      ),
+      h(
+        "div",
+        {
+          style: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 26,
+            padding: "28px 34px",
+            minHeight: winnerHeight,
+            background: "#2a231d",
+            borderBottom: remainingEntries.length > 0 ? "2px solid #30323c" : "none",
+          },
+        },
+        h(
+          "div",
+          {
+            style: {
+              display: "flex",
+              alignItems: "center",
+              gap: 24,
+              flex: 1,
+            },
+          },
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                minWidth: 140,
+              },
+            },
+            renderCrownIcon(h, 42),
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  marginTop: -6,
+                },
+              },
+              winnerAvatar
+            )
+          ),
+          h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "center",
+                gap: 18,
+                flex: 1,
+              },
+            },
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 20,
+                },
+              },
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 40,
+                    fontWeight: 700,
+                    lineHeight: 1,
+                    flex: 1,
+                  },
+                },
+                winner.player.displayName
+              ),
+              renderStatusBadge(h, winner.summary.status, {
+                fontSize: 22,
+                paddingY: 12,
+                paddingX: 22,
+                iconSize: 18,
+                gap: 10,
+              })
+            ),
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: 12,
+                },
+              },
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 82,
+                    fontWeight: 700,
+                    lineHeight: 0.9,
+                    letterSpacing: -2,
+                  },
+                },
+                String(winner.summary.guessCount)
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 30,
+                    color: "#8f92a0",
+                    paddingBottom: 10,
+                  },
+                },
+                "guesses"
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 28,
+                    color: "#7f8190",
+                    paddingBottom: 10,
+                  },
+                },
+                "/"
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 30,
+                    color: "#8f92a0",
+                    paddingBottom: 10,
+                  },
+                },
+                formatHintLabel(winner.summary.hintCount)
+              )
+            )
+          )
+        )
+      ),
+      ...remainingEntries.flatMap((entry, index) => {
+        const avatarNode = renderAvatarNode(h, entry.player, entry.avatarDataUri, {
+          size: 64,
+          borderWidth: 3,
+          borderColor: "#2f313a",
+          fontSize: 24,
+        });
+
+        return [
+          h(
+            "div",
+            {
+              key: `row-${entry.player.userId}`,
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: 24,
+                minHeight: rowHeight,
+                padding: "22px 34px",
+                background: "#1a1b20",
+                borderBottom:
+                  index === remainingEntries.length - 1 && hiddenCount === 0 ? "none" : "2px solid #30323c",
+              },
+            },
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 24,
+                  flex: 1,
+                },
+              },
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    width: 36,
+                    justifyContent: "center",
+                    fontSize: 28,
+                    color: "#767987",
+                    flexShrink: 0,
+                  },
+                },
+                String(index + 2)
+              ),
+              avatarNode,
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 12,
+                    flex: 1,
+                  },
+                },
+                h(
+                  "div",
+                  {
+                    style: {
+                      display: "flex",
+                      fontSize: 28,
+                      fontWeight: 400,
+                      lineHeight: 1,
+                    },
+                  },
+                  entry.player.displayName
+                ),
+                renderStatusBadge(h, entry.summary.status, {
+                  fontSize: 18,
+                  paddingY: 10,
+                  paddingX: 16,
+                  iconSize: 15,
+                  gap: 8,
+                })
+              )
+            ),
+            h(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  alignItems: "flex-end",
+                  gap: 10,
+                  marginLeft: 20,
+                },
+              },
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 54,
+                    fontWeight: 700,
+                    lineHeight: 0.9,
+                    letterSpacing: -1.5,
+                  },
+                },
+                String(entry.summary.guessCount)
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 22,
+                    color: "#8f92a0",
+                    paddingBottom: 8,
+                  },
+                },
+                `guesses${formatHintLabel(entry.summary.hintCount, true)}`
+              )
+            )
+          ),
+        ];
+      }),
+      hiddenCount > 0
+        ? h(
+            "div",
+            {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                minHeight: footerHeight,
+                padding: "14px 24px",
+                color: "#8f92a0",
+                fontSize: 20,
+                background: "#18191f",
+              },
+            },
+            `+${hiddenCount} more players`
+          )
+        : null
+    )
+  );
+}
+
+async function renderLeaderboardCardBuffer({ puzzle, entries }) {
+  const hydratedEntries = await Promise.all(
+    entries.map(async (entry) => ({
+      ...entry,
+      avatarDataUri: await getAvatarDataUri(entry.player.avatarUrl),
+    }))
+  );
+  const visibleEntries = hydratedEntries.slice(0, LEADERBOARD_ENTRY_LIMIT);
+  const hiddenCount = Math.max(0, hydratedEntries.length - visibleEntries.length);
+  const markup = buildLeaderboardCardMarkup({
+    puzzle,
+    entries: visibleEntries,
+    hiddenCount,
+  });
+  const fonts = await getProgressCardFonts();
+  const height = 118 + 232 + Math.max(0, visibleEntries.length - 1) * 148 + (hiddenCount > 0 ? 54 : 0) + 28;
+  const svg = await satori(markup, {
+    width: 1220,
+    height,
+    fonts,
+  });
+  const resvg = new Resvg(svg, {
+    fitTo: {
+      mode: "width",
+      value: 1220,
+    },
+  });
+
+  return {
+    buffer: resvg.render().asPng(),
+    visibleEntries,
+    hiddenCount,
+  };
+}
+
 function buildProgressMessageContent({ player }) {
   return `${player.displayName} was playing Contexto`;
+}
+
+function buildLeaderboardMessageContent({ puzzle }) {
+  const contextoNumber = getContextoNumber(puzzle);
+  return contextoNumber
+    ? `Contexto #${contextoNumber} leaderboard for ${puzzle.date}`
+    : `Contexto leaderboard for ${puzzle.date}`;
 }
 
 async function loadProgressMessageRecord({ userId, puzzleId, channelId }) {
@@ -2316,6 +3032,34 @@ async function sendPlayPrompt({ channelId }) {
   return targetChannelId;
 }
 
+async function buildLeaderboardAttachment({ guildId, dateInput, defaultDayOffset = -1 }) {
+  const targetPuzzleDateId =
+    normalizePuzzleDateOverride(dateInput) ||
+    shiftPuzzleDateId(getCurrentPuzzleDateId(), defaultDayOffset);
+  const puzzle = await loadPuzzleForDateId(targetPuzzleDateId);
+  const entries = await loadLeaderboardEntries({
+    puzzleId: puzzle.id,
+    guildId,
+  });
+
+  if (entries.length === 0) {
+    throw new Error(`No leaderboard entries found for ${puzzle.date} yet.`);
+  }
+
+  const { buffer } = await renderLeaderboardCardBuffer({
+    puzzle,
+    entries,
+  });
+  const attachmentName = `contexto-leaderboard-${puzzle.id}.png`;
+
+  return {
+    puzzle,
+    attachment: new AttachmentBuilder(buffer, {
+      name: attachmentName,
+    }),
+  };
+}
+
 async function replyEphemeral(interaction, content) {
   const payload = {
     content,
@@ -2816,6 +3560,39 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.reply({
         content: `Posted a Contexto play prompt in <#${targetChannelId}>.`,
         flags: MessageFlags.Ephemeral,
+      });
+    } else if (interaction.commandName === "contexto-leaderboard") {
+      if (!interaction.guildId) {
+        throw new Error("Leaderboards can only be generated inside a server.");
+      }
+
+      await interaction.deferReply();
+
+      const requestedDate = interaction.options.getString("date");
+      const { puzzle, attachment } = await buildLeaderboardAttachment({
+        guildId: interaction.guildId,
+        dateInput: requestedDate,
+      });
+
+      await interaction.editReply({
+        content: buildLeaderboardMessageContent({ puzzle }),
+        files: [attachment],
+      });
+    } else if (interaction.commandName === "contexto-leaderboard-today") {
+      if (!interaction.guildId) {
+        throw new Error("Leaderboards can only be generated inside a server.");
+      }
+
+      await interaction.deferReply();
+
+      const { puzzle, attachment } = await buildLeaderboardAttachment({
+        guildId: interaction.guildId,
+        defaultDayOffset: 0,
+      });
+
+      await interaction.editReply({
+        content: buildLeaderboardMessageContent({ puzzle }),
+        files: [attachment],
       });
     }
   } catch (error) {
