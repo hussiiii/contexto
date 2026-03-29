@@ -929,6 +929,50 @@ async function loadLeaderboardEntries({ puzzleId, guildId, limit = null }) {
   return Number.isFinite(limit) ? entries.slice(0, limit) : entries;
 }
 
+async function loadGuildSolveDateSet(guildId) {
+  if (!progressPool) {
+    throw new Error("Leaderboard requires DATABASE_URL to be configured.");
+  }
+
+  await ensureProgressStorage();
+
+  const params = [];
+  const guildFilter = guildId ? "AND guild_id = $1" : "";
+
+  if (guildId) {
+    params.push(guildId);
+  }
+
+  const result = await progressPool.query(
+    `
+      SELECT DISTINCT puzzle_id
+      FROM player_progress
+      WHERE solved_answer IS NOT NULL
+      ${guildFilter}
+    `,
+    params
+  );
+
+  return new Set(
+    result.rows
+      .map((row) => normalizePuzzleDateOverride(row.puzzle_id))
+      .filter(Boolean)
+  );
+}
+
+async function getGuildSolveStreak({ guildId, endingPuzzleId }) {
+  const solvedDateSet = await loadGuildSolveDateSet(guildId);
+  let currentDateId = normalizePuzzleDateOverride(endingPuzzleId);
+  let streak = 0;
+
+  while (currentDateId && solvedDateSet.has(currentDateId)) {
+    streak += 1;
+    currentDateId = shiftPuzzleDateId(currentDateId, -1);
+  }
+
+  return streak;
+}
+
 function getPlayerInitials(player) {
   const source = String(player?.displayName || "Player").trim();
   const parts = source.split(/\s+/).filter(Boolean).slice(0, 2);
@@ -1142,6 +1186,7 @@ function renderStatusBadge(h, status, options = {}) {
         fontSize,
         fontWeight: 700,
         alignItems: "center",
+        alignSelf: "flex-start",
         gap,
       },
     },
@@ -1596,11 +1641,11 @@ async function renderProgressCardBuffer({ player, puzzle, progress }) {
 
 function formatHintLabel(hintCount, compact = false) {
   if (hintCount <= 0) {
-    return compact ? "" : "0 hints";
+    return compact ? " / 0 hints" : "0 hints";
   }
 
   if (compact) {
-    return ` / ${hintCount}h`;
+    return ` / ${hintCount} ${hintCount === 1 ? "hint" : "hints"}`;
   }
 
   return `${hintCount} ${hintCount === 1 ? "hint" : "hints"}`;
@@ -1610,16 +1655,27 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
   const h = React.createElement;
   const winner = entries[0];
   const remainingEntries = entries.slice(1);
-  const cardWidth = 1220;
-  const winnerHeight = 232;
-  const rowHeight = 148;
-  const footerHeight = hiddenCount > 0 ? 54 : 0;
-  const cardHeight = 118 + winnerHeight + remainingEntries.length * rowHeight + footerHeight + 28;
+  const contextoNumber = getContextoNumber(puzzle);
+  const cardWidth = 1360;
+  const winnerHeight = 276;
+  const rowHeight = 182;
+  const footerHeight = hiddenCount > 0 ? 66 : 0;
+  const cardHeight = 136 + winnerHeight + remainingEntries.length * rowHeight + footerHeight + 32;
+  const winnerGuessDisplay = getProgressStatDisplay(
+    winner.summary.status,
+    "guesses",
+    winner.summary.guessCount
+  );
+  const winnerHintDisplay = getProgressStatDisplay(
+    winner.summary.status,
+    "hints",
+    winner.summary.hintCount
+  );
   const winnerAvatar = renderAvatarNode(h, winner.player, winner.avatarDataUri, {
-    size: 112,
-    borderWidth: 5,
+    size: 136,
+    borderWidth: 6,
     borderColor: "#a56a00",
-    fontSize: 42,
+    fontSize: 52,
   });
 
   return h(
@@ -1656,7 +1712,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            padding: "28px 34px",
+            padding: "30px 38px",
             background: "#1b1c22",
             borderBottom: "2px solid #30323c",
           },
@@ -1666,18 +1722,18 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
           {
             style: {
               display: "flex",
-              fontSize: 32,
+              fontSize: 36,
               fontWeight: 700,
             },
           },
-          "Contexto Leaderboard"
+          contextoNumber ? `Contexto #${contextoNumber} Leaderboard` : "Contexto Leaderboard"
         ),
         h(
           "div",
           {
             style: {
               display: "flex",
-              fontSize: 30,
+              fontSize: 34,
               color: "#9092a0",
             },
           },
@@ -1691,8 +1747,8 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
-            gap: 26,
-            padding: "28px 34px",
+            gap: 34,
+            padding: "34px 38px",
             minHeight: winnerHeight,
             background: "#2a231d",
             borderBottom: remainingEntries.length > 0 ? "2px solid #30323c" : "none",
@@ -1704,7 +1760,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
             style: {
               display: "flex",
               alignItems: "center",
-              gap: 24,
+              gap: 28,
               flex: 1,
             },
           },
@@ -1716,16 +1772,16 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 flexDirection: "column",
                 alignItems: "center",
                 justifyContent: "center",
-                minWidth: 140,
+                minWidth: 168,
               },
             },
-            renderCrownIcon(h, 42),
+            renderCrownIcon(h, 50),
             h(
               "div",
               {
                 style: {
                   display: "flex",
-                  marginTop: -6,
+                  marginTop: -8,
                 },
               },
               winnerAvatar
@@ -1738,7 +1794,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 display: "flex",
                 flexDirection: "column",
                 justifyContent: "center",
-                gap: 18,
+                gap: 20,
                 flex: 1,
               },
             },
@@ -1749,7 +1805,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "space-between",
-                  gap: 20,
+                  gap: 24,
                 },
               },
               h(
@@ -1757,7 +1813,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 40,
+                    fontSize: 48,
                     fontWeight: 700,
                     lineHeight: 1,
                     flex: 1,
@@ -1766,11 +1822,11 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 winner.player.displayName
               ),
               renderStatusBadge(h, winner.summary.status, {
-                fontSize: 22,
-                paddingY: 12,
-                paddingX: 22,
-                iconSize: 18,
-                gap: 10,
+                fontSize: 24,
+                paddingY: 14,
+                paddingX: 24,
+                iconSize: 20,
+                gap: 12,
               })
             ),
             h(
@@ -1779,7 +1835,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 style: {
                   display: "flex",
                   alignItems: "flex-end",
-                  gap: 12,
+                  gap: 14,
                 },
               },
               h(
@@ -1787,22 +1843,23 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 82,
+                    fontSize: 96,
                     fontWeight: 700,
                     lineHeight: 0.9,
                     letterSpacing: -2,
+                    color: winnerGuessDisplay.color,
                   },
                 },
-                String(winner.summary.guessCount)
+                winnerGuessDisplay.value
               ),
               h(
                 "div",
                 {
                   style: {
                     display: "flex",
-                    fontSize: 30,
+                    fontSize: 34,
                     color: "#8f92a0",
-                    paddingBottom: 10,
+                    paddingBottom: 12,
                   },
                 },
                 "guesses"
@@ -1812,7 +1869,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 28,
+                    fontSize: 32,
                     color: "#7f8190",
                     paddingBottom: 10,
                   },
@@ -1824,23 +1881,39 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 30,
-                    color: "#8f92a0",
-                    paddingBottom: 10,
+                    fontSize: 96,
+                    fontWeight: 700,
+                    lineHeight: 0.9,
+                    letterSpacing: -2,
+                    color: winnerHintDisplay.color,
                   },
                 },
-                formatHintLabel(winner.summary.hintCount)
+                winnerHintDisplay.value
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 34,
+                    color: "#8f92a0",
+                    paddingBottom: 12,
+                  },
+                },
+                winner.summary.hintCount === 1 ? "hint" : "hints"
               )
             )
           )
         )
       ),
       ...remainingEntries.flatMap((entry, index) => {
+        const guessDisplay = getProgressStatDisplay(entry.summary.status, "guesses", entry.summary.guessCount);
+        const hintDisplay = getProgressStatDisplay(entry.summary.status, "hints", entry.summary.hintCount);
         const avatarNode = renderAvatarNode(h, entry.player, entry.avatarDataUri, {
-          size: 64,
-          borderWidth: 3,
+          size: 82,
+          borderWidth: 4,
           borderColor: "#2f313a",
-          fontSize: 24,
+          fontSize: 30,
         });
 
         return [
@@ -1852,9 +1925,9 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "space-between",
-                gap: 24,
+                gap: 28,
                 minHeight: rowHeight,
-                padding: "22px 34px",
+                padding: "24px 38px",
                 background: "#1a1b20",
                 borderBottom:
                   index === remainingEntries.length - 1 && hiddenCount === 0 ? "none" : "2px solid #30323c",
@@ -1866,7 +1939,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 style: {
                   display: "flex",
                   alignItems: "center",
-                  gap: 24,
+                  gap: 28,
                   flex: 1,
                 },
               },
@@ -1875,9 +1948,9 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    width: 36,
+                    width: 42,
                     justifyContent: "center",
-                    fontSize: 28,
+                    fontSize: 34,
                     color: "#767987",
                     flexShrink: 0,
                   },
@@ -1891,7 +1964,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                   style: {
                     display: "flex",
                     flexDirection: "column",
-                    gap: 12,
+                    gap: 16,
                     flex: 1,
                   },
                 },
@@ -1900,7 +1973,7 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                   {
                     style: {
                       display: "flex",
-                      fontSize: 28,
+                      fontSize: 36,
                       fontWeight: 400,
                       lineHeight: 1,
                     },
@@ -1908,10 +1981,10 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                   entry.player.displayName
                 ),
                 renderStatusBadge(h, entry.summary.status, {
-                  fontSize: 18,
+                  fontSize: 20,
                   paddingY: 10,
-                  paddingX: 16,
-                  iconSize: 15,
+                  paddingX: 14,
+                  iconSize: 16,
                   gap: 8,
                 })
               )
@@ -1931,25 +2004,64 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 {
                   style: {
                     display: "flex",
-                    fontSize: 54,
+                    fontSize: 68,
                     fontWeight: 700,
                     lineHeight: 0.9,
                     letterSpacing: -1.5,
+                    color: guessDisplay.color,
                   },
                 },
-                String(entry.summary.guessCount)
+                guessDisplay.value
               ),
               h(
                 "div",
                 {
                   style: {
                     display: "flex",
-                    fontSize: 22,
+                    fontSize: 26,
                     color: "#8f92a0",
-                    paddingBottom: 8,
+                    paddingBottom: 10,
                   },
                 },
-                `guesses${formatHintLabel(entry.summary.hintCount, true)}`
+                "guesses"
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 26,
+                    color: "#7f8190",
+                    paddingBottom: 9,
+                  },
+                },
+                "/"
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 68,
+                    fontWeight: 700,
+                    lineHeight: 0.9,
+                    letterSpacing: -1.5,
+                    color: hintDisplay.color,
+                  },
+                },
+                hintDisplay.value
+              ),
+              h(
+                "div",
+                {
+                  style: {
+                    display: "flex",
+                    fontSize: 26,
+                    color: "#8f92a0",
+                    paddingBottom: 10,
+                  },
+                },
+                entry.summary.hintCount === 1 ? "hint" : "hints"
               )
             )
           ),
@@ -1964,9 +2076,9 @@ function buildLeaderboardCardMarkup({ puzzle, entries, hiddenCount = 0 }) {
                 alignItems: "center",
                 justifyContent: "center",
                 minHeight: footerHeight,
-                padding: "14px 24px",
+                padding: "16px 24px",
                 color: "#8f92a0",
-                fontSize: 20,
+                fontSize: 24,
                 background: "#18191f",
               },
             },
@@ -1992,16 +2104,17 @@ async function renderLeaderboardCardBuffer({ puzzle, entries }) {
     hiddenCount,
   });
   const fonts = await getProgressCardFonts();
-  const height = 118 + 232 + Math.max(0, visibleEntries.length - 1) * 148 + (hiddenCount > 0 ? 54 : 0) + 28;
+  const height =
+    136 + 276 + Math.max(0, visibleEntries.length - 1) * 182 + (hiddenCount > 0 ? 66 : 0) + 32;
   const svg = await satori(markup, {
-    width: 1220,
+    width: 1360,
     height,
     fonts,
   });
   const resvg = new Resvg(svg, {
     fitTo: {
       mode: "width",
-      value: 1220,
+      value: 1360,
     },
   });
 
@@ -2016,11 +2129,20 @@ function buildProgressMessageContent({ player }) {
   return `${player.displayName} was playing Contexto`;
 }
 
-function buildLeaderboardMessageContent({ puzzle }) {
-  const contextoNumber = getContextoNumber(puzzle);
-  return contextoNumber
-    ? `Contexto #${contextoNumber} leaderboard for ${puzzle.date}`
-    : `Contexto leaderboard for ${puzzle.date}`;
+function buildLeaderboardMessageContent({ puzzle, entries, streak, timeframeLabel }) {
+  const intro = `Your group is on a ${streak}-day streak! 🔥 Here are ${timeframeLabel} results:`;
+  const scoreLines = entries.map((entry) => {
+    const score = getLeaderboardScore(entry.summary);
+    const hintPart =
+      entry.summary.hintCount > 0
+        ? ` (${entry.summary.guessCount} guesses, ${entry.summary.hintCount} ${
+            entry.summary.hintCount === 1 ? "hint" : "hints"
+          })`
+        : "";
+    return `<@${entry.player.userId}>: ${score} score${hintPart}`;
+  });
+
+  return [intro, ...scoreLines].join("\n");
 }
 
 async function loadProgressMessageRecord({ userId, puzzleId, channelId }) {
@@ -3046,14 +3168,29 @@ async function buildLeaderboardAttachment({ guildId, dateInput, defaultDayOffset
     throw new Error(`No leaderboard entries found for ${puzzle.date} yet.`);
   }
 
+  const streak = await getGuildSolveStreak({
+    guildId,
+    endingPuzzleId: puzzle.id,
+  });
   const { buffer } = await renderLeaderboardCardBuffer({
     puzzle,
     entries,
   });
   const attachmentName = `contexto-leaderboard-${puzzle.id}.png`;
+  const currentPuzzleDateId = getCurrentPuzzleDateId();
+  const yesterdayPuzzleDateId = shiftPuzzleDateId(currentPuzzleDateId, -1);
+  const timeframeLabel =
+    puzzle.id === currentPuzzleDateId
+      ? "today's"
+      : puzzle.id === yesterdayPuzzleDateId
+        ? "yesterday's"
+        : `${puzzle.date}'s`;
 
   return {
     puzzle,
+    entries,
+    streak,
+    timeframeLabel,
     attachment: new AttachmentBuilder(buffer, {
       name: attachmentName,
     }),
@@ -3569,14 +3706,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
       await interaction.deferReply();
 
       const requestedDate = interaction.options.getString("date");
-      const { puzzle, attachment } = await buildLeaderboardAttachment({
+      const { puzzle, entries, streak, timeframeLabel, attachment } = await buildLeaderboardAttachment({
         guildId: interaction.guildId,
         dateInput: requestedDate,
       });
 
       await interaction.editReply({
-        content: buildLeaderboardMessageContent({ puzzle }),
+        content: buildLeaderboardMessageContent({ puzzle, entries, streak, timeframeLabel }),
         files: [attachment],
+        allowedMentions: {
+          users: entries.map((entry) => entry.player.userId).filter(Boolean),
+        },
       });
     } else if (interaction.commandName === "contexto-leaderboard-today") {
       if (!interaction.guildId) {
@@ -3585,14 +3725,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
 
       await interaction.deferReply();
 
-      const { puzzle, attachment } = await buildLeaderboardAttachment({
+      const { puzzle, entries, streak, timeframeLabel, attachment } = await buildLeaderboardAttachment({
         guildId: interaction.guildId,
         defaultDayOffset: 0,
       });
 
       await interaction.editReply({
-        content: buildLeaderboardMessageContent({ puzzle }),
+        content: buildLeaderboardMessageContent({ puzzle, entries, streak, timeframeLabel }),
         files: [attachment],
+        allowedMentions: {
+          users: entries.map((entry) => entry.player.userId).filter(Boolean),
+        },
       });
     }
   } catch (error) {
