@@ -3210,6 +3210,12 @@ async function sendPlayPrompt({ channelId }) {
   return targetChannelId;
 }
 
+function createNoLeaderboardEntriesError(puzzle) {
+  const error = new Error(`No leaderboard entries found for ${puzzle.date} yet.`);
+  error.code = "NO_LEADERBOARD_ENTRIES";
+  return error;
+}
+
 async function buildLeaderboardAttachment({ guildId, dateInput, defaultDayOffset = -1 }) {
   const targetPuzzleDateId =
     normalizePuzzleDateOverride(dateInput) ||
@@ -3221,7 +3227,7 @@ async function buildLeaderboardAttachment({ guildId, dateInput, defaultDayOffset
   });
 
   if (entries.length === 0) {
-    throw new Error(`No leaderboard entries found for ${puzzle.date} yet.`);
+    throw createNoLeaderboardEntriesError(puzzle);
   }
 
   const streak = await getGuildSolveStreak({
@@ -3520,6 +3526,17 @@ async function handleInternalPostLeaderboard(req, res) {
       created: result.created,
     });
   } catch (error) {
+    if (error?.code === "NO_LEADERBOARD_ENTRIES") {
+      console.log(error.message);
+      res.json({
+        ok: true,
+        skipped: true,
+        reason: "no_entries",
+        error: error.message,
+      });
+      return;
+    }
+
     console.error("Failed to post leaderboard:", error);
     res.status(500).json({
       ok: false,
