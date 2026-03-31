@@ -147,6 +147,7 @@ const guessScoreCache = new Map();
 const avatarDataUriCache = new Map();
 let progressCardFontsPromise;
 const semanticPuzzlePromises = new Map();
+const backgroundPrecomputePromises = new Map();
 let orderedAnswersPromise;
 let acceptedWordsPromise;
 let allowedAnswersPromise;
@@ -3058,6 +3059,49 @@ async function precomputeTodayPuzzle({ forceRefresh = false } = {}) {
   };
 }
 
+async function triggerTodayPuzzlePrecompute({
+  forceRefresh = false,
+  source = "internal",
+} = {}) {
+  const puzzle = await loadPuzzle();
+  const promiseKey = `${puzzle.id}:${forceRefresh ? "force" : "default"}`;
+
+  if (!backgroundPrecomputePromises.has(promiseKey)) {
+    const startedAt = Date.now();
+    const task = precomputeTodayPuzzle({ forceRefresh })
+      .then((result) => {
+        const elapsedSeconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+        console.log(
+          `[${source}] Background precompute ready for puzzle ${result.puzzleId} (${result.answer}) with ${result.vocabularySize} ranked words in ${elapsedSeconds}s.`
+        );
+        return result;
+      })
+      .catch((error) => {
+        console.error(`[${source}] Background precompute failed for puzzle ${puzzle.id}:`, error);
+        return null;
+      })
+      .finally(() => {
+        backgroundPrecomputePromises.delete(promiseKey);
+      });
+
+    backgroundPrecomputePromises.set(promiseKey, task);
+
+    return {
+      puzzleId: puzzle.id,
+      date: puzzle.date,
+      forceRefresh,
+      started: true,
+    };
+  }
+
+  return {
+    puzzleId: puzzle.id,
+    date: puzzle.date,
+    forceRefresh,
+    started: false,
+  };
+}
+
 async function scoreGuess(guess) {
   const normalizedGuess = parseGuessInput(guess);
   const acceptedWords = await getAcceptedWords();
@@ -3467,15 +3511,36 @@ async function handleInternalPrecompute(req, res) {
       }
     }
 
-    const result = await precomputeTodayPuzzle({
-      forceRefresh:
-        String(req.body?.force || req.query?.force || "")
-          .trim()
-          .toLowerCase() === "true",
+    const forceRefresh =
+      String(req.body?.force || req.query?.force || "")
+        .trim()
+        .toLowerCase() === "true";
+    const waitForCompletion =
+      String(req.body?.wait || req.query?.wait || "")
+        .trim()
+        .toLowerCase() === "true";
+
+    if (waitForCompletion) {
+      const result = await precomputeTodayPuzzle({
+        forceRefresh,
+      });
+
+      res.json({
+        ok: true,
+        mode: "completed",
+        ...result,
+      });
+      return;
+    }
+
+    const result = await triggerTodayPuzzlePrecompute({
+      forceRefresh,
+      source: "internal-precompute",
     });
 
     res.json({
       ok: true,
+      mode: "accepted",
       ...result,
     });
   } catch (error) {

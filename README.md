@@ -219,6 +219,8 @@ The app exposes:
 
 This endpoint is intended for your Railway Function only. It is token-protected so random people cannot trigger bot posts or spam leaderboard renders from the public internet.
 
+Note: the precompute endpoint now returns immediately for cron usage and continues the cache build in the main app process. This avoids Railway Function HTTP timeouts on large daily cache builds. The detailed batch progress and completion logs will appear in the main app service logs.
+
 ### Railway Function file
 
 The repo includes `railway/post-leaderboard-cron.ts`.
