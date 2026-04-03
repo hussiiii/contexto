@@ -3320,6 +3320,7 @@ async function buildLeaderboardMessagePayload({ guildId, dateInput, defaultDayOf
         timeframeLabel: result.timeframeLabel,
       }),
       files: [result.attachment],
+      components: createPlayMessageComponents(),
       allowedMentions: {
         users: result.entries.map((entry) => entry.player.userId).filter(Boolean),
       },

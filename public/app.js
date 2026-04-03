@@ -83,12 +83,6 @@ function showScreen(screenName) {
   homeScreen.classList.toggle("screen-active", onHome);
   gameScreen.classList.toggle("screen-active", !onHome);
   closeMenu();
-
-  if (!onHome) {
-    window.setTimeout(() => {
-      guessInput.focus();
-    }, 50);
-  }
 }
 
 function setDates() {
