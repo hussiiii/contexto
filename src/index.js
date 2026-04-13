@@ -671,6 +671,52 @@ async function loadPlayerProgress(player, puzzleId) {
   };
 }
 
+async function ensureStarterRevealProgress({ player, puzzleId, progress }) {
+  const baseProgress = progress || createEmptyProgressState();
+  const guesses = normalizeStoredGuesses(baseProgress.guesses);
+  const starterReveal = await getStarterRevealGuess(guesses);
+
+  if (!starterReveal) {
+    return {
+      progress: {
+        ...baseProgress,
+        guesses,
+        guessCount: countScoredGuesses(guesses),
+        hintCount: guesses.filter((entry) => entry.hinted).length,
+        bestRank: getBestRankFromGuesses(guesses),
+      },
+      starterRevealAdded: false,
+      starterReveal: null,
+    };
+  }
+
+  const nextGuesses = [starterReveal, ...guesses];
+  const nextProgress = {
+    ...baseProgress,
+    guesses: nextGuesses,
+    guessCount: countScoredGuesses(nextGuesses),
+    hintCount: nextGuesses.filter((entry) => entry.hinted).length,
+    bestRank: getBestRankFromGuesses(nextGuesses),
+  };
+
+  if (player) {
+    await savePlayerProgress({
+      player,
+      puzzleId,
+      guesses: nextGuesses,
+      solvedAnswer: baseProgress.solvedAnswer,
+      gaveUp: baseProgress.gaveUp,
+      resultPosted: baseProgress.resultPosted,
+    });
+  }
+
+  return {
+    progress: nextProgress,
+    starterRevealAdded: true,
+    starterReveal,
+  };
+}
+
 async function savePlayerProgress({
   player,
   puzzleId,
@@ -3213,6 +3259,46 @@ async function getHintGuess({ guessedWords = [], bestRank }) {
   throw new Error("No hint available.");
 }
 
+async function getStarterRevealGuess(existingGuesses = []) {
+  const normalizedExistingWords = new Set(
+    (Array.isArray(existingGuesses) ? existingGuesses : [])
+      .map((entry) => normalizeGuess(entry?.guess))
+      .filter(Boolean)
+  );
+  const { puzzle, semantic } = await getSemanticPuzzle();
+  const preferredEntry = semantic.rankedWords[99];
+
+  if (preferredEntry && preferredEntry.word !== puzzle.answer && !normalizedExistingWords.has(preferredEntry.word)) {
+    return {
+      guess: preferredEntry.word,
+      rank: 100,
+      solved: false,
+      hinted: false,
+      revealed: true,
+      countsTowardScore: false,
+    };
+  }
+
+  for (let index = 99; index < semantic.rankedWords.length; index += 1) {
+    const entry = semantic.rankedWords[index];
+
+    if (!entry || entry.word === puzzle.answer || normalizedExistingWords.has(entry.word)) {
+      continue;
+    }
+
+    return {
+      guess: entry.word,
+      rank: index + 1,
+      solved: false,
+      hinted: false,
+      revealed: true,
+      countsTowardScore: false,
+    };
+  }
+
+  return null;
+}
+
 function createPlayMessageComponents() {
   return [
     new ActionRowBuilder().addComponents(
@@ -3645,7 +3731,12 @@ app.post("/api/progress", async (req, res) => {
       userId: player?.userId || null,
       puzzleId: puzzle.id,
     });
-    const progress = await loadPlayerProgress(player, puzzle.id);
+    const existingProgress = await loadPlayerProgress(player, puzzle.id);
+    const { progress, starterRevealAdded, starterReveal } = await ensureStarterRevealProgress({
+      player,
+      puzzleId: puzzle.id,
+      progress: existingProgress,
+    });
 
     if (player) {
       await syncPlayerProgressCard({
@@ -3658,6 +3749,8 @@ app.post("/api/progress", async (req, res) => {
     res.json({
       ok: true,
       progress,
+      starterRevealAdded,
+      starterReveal,
     });
   } catch (error) {
     console.error("Failed to load player progress:", error);

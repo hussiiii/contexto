@@ -805,7 +805,10 @@ async function loadSavedProgress() {
   const progress = data.progress;
 
   if (!progress) {
-    return;
+    return {
+      starterRevealAdded: Boolean(data.starterRevealAdded),
+      starterReveal: data.starterReveal || null,
+    };
   }
 
   guesses = Array.isArray(progress.guesses) ? progress.guesses : [];
@@ -819,6 +822,11 @@ async function loadSavedProgress() {
       celebrate: false,
     });
   }
+
+  return {
+    starterRevealAdded: Boolean(data.starterRevealAdded),
+    starterReveal: data.starterReveal || null,
+  };
 }
 
 async function useHint() {
@@ -977,15 +985,21 @@ async function bootstrap() {
     await loadPuzzle();
     await initializeDiscordSdk(config);
     setGuessControlsEnabled(true);
+    let loadMeta = null;
 
     if (currentPlayer) {
       setGuessControlsEnabled(false);
       setStatus("Fetching progress...");
-      await loadSavedProgress();
+      loadMeta = await loadSavedProgress();
       setGuessControlsEnabled(true);
     }
 
-    if (solvedAnswer) {
+    if (loadMeta?.starterRevealAdded && loadMeta?.starterReveal?.guess) {
+      setStatus(
+        `Free starter clue: "${loadMeta.starterReveal.guess}" is rank ${loadMeta.starterReveal.rank}.`,
+        "success"
+      );
+    } else if (solvedAnswer) {
       setStatus("Restored your saved progress.", "success");
     } else if (guesses.length > 0) {
       setStatus("Restored your saved progress.", "success");
