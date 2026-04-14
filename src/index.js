@@ -3260,6 +3260,18 @@ async function getHintGuess({ guessedWords = [], bestRank }) {
 }
 
 async function getStarterRevealGuess(existingGuesses = []) {
+  const existingStarterReveal = (Array.isArray(existingGuesses) ? existingGuesses : []).some(
+    (entry) =>
+      entry?.revealed &&
+      entry?.countsTowardScore === false &&
+      !entry?.hinted &&
+      !entry?.solved
+  );
+
+  if (existingStarterReveal) {
+    return null;
+  }
+
   const normalizedExistingWords = new Set(
     (Array.isArray(existingGuesses) ? existingGuesses : [])
       .map((entry) => normalizeGuess(entry?.guess))
